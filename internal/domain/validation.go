@@ -5,9 +5,7 @@ import (
 	"strings"
 )
 
-// ValidateKey enforces the minimal invariant that a key is present. Key
-// naming restrictions are an open question in docs/domain-model.md and are
-// deliberately not resolved here.
+// ValidateKey enforces the minimal invariant that a key is present.
 func ValidateKey(key string) error {
 	if strings.TrimSpace(key) == "" {
 		return fmt.Errorf("%w: key is required", ErrValidation)
