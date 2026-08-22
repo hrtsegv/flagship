@@ -1,11 +1,9 @@
 // Package flagship is the Flagship Go SDK. It lets an application evaluate
-// boolean feature flags locally, without an HTTP request per evaluation
-// (see docs/decisions/0001-local-flag-evaluation.md).
+// boolean feature flags locally, without an HTTP request per evaluation.
 //
 // A Client holds an immutable configuration Snapshot. Evaluations read
 // from whichever snapshot is currently installed; installing a new
-// snapshot replaces it atomically (see Client.UpdateSnapshot and
-// docs/decisions/0002-snapshot-based-sdk-configuration.md).
+// snapshot replaces it atomically (see Client.UpdateSnapshot).
 package flagship
 
 import "sync/atomic"
@@ -48,8 +46,8 @@ func (c *Client) Bool(key string, defaultValue bool) bool {
 // snapshot yet), and reports whether it was applied.
 //
 // An incoming snapshot with an equal or older version than the current one
-// is rejected as a no-op rather than an error: see
-// docs/decisions/0003-sdk-snapshot-version-acceptance.md.
+// is rejected as a no-op rather than an error, since a future poller will
+// call this on every poll and most polls won't observe a version change.
 //
 // UpdateSnapshot exists for a future configuration-sync mechanism
 // (polling/SSE) to install new configuration as it arrives; most

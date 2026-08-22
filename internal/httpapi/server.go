@@ -6,8 +6,8 @@ import (
 	"github.com/hrtsegv/flagship/internal/app"
 )
 
-// NewServer wires the HTTP routes documented in docs/api.md to their
-// handlers and returns the resulting http.Handler.
+// NewServer wires the HTTP routes to their handlers and returns the
+// resulting http.Handler.
 func NewServer(projects *app.ProjectService, environments *app.EnvironmentService, flags *app.FlagService) http.Handler {
 	mux := http.NewServeMux()
 
