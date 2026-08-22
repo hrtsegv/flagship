@@ -1,4 +1,8 @@
-# Flagship
+<p align="center">
+  <img src="assets/logo.svg" alt="Flagship logo: a ship carrying a Go-gopher-style mascot, flying a toggle-switch flag from its mast" width="220">
+</p>
+
+<h1 align="center">Flagship</h1>
 
 Flagship is a self-hosted feature-flag platform written in Go. It lets a team
 change application behavior at runtime — enabling a feature, rolling it back,

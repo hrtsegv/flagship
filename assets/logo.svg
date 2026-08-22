@@ -1,0 +1,34 @@
+<svg width="240" height="200" viewBox="0 0 480 400" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Flagship logo</title>
+<desc>A ship hull carrying a Go-gopher-style mascot head, flying a flag shaped like an on/off toggle switch from its mast.</desc>
+
+<g stroke="#0B2530" stroke-width="6" fill="none" opacity="0.35">
+<path d="M10,352 Q60,336 110,352 T210,352 T310,352 T410,352 T470,352"/>
+</g>
+<g stroke="#00ADD8" stroke-width="6" fill="none" opacity="0.4">
+<path d="M20,368 Q70,354 120,368 T220,368 T320,368 T420,368 T470,368"/>
+</g>
+
+<path d="M40,300 Q40,258 92,254 L408,254 Q452,258 452,300 Q452,332 398,338 L94,338 Q40,332 40,300 Z"
+  fill="#075C73" stroke="#0B2530" stroke-width="6"/>
+
+<rect x="322" y="70" width="8" height="190" rx="3" fill="#0B2530"/>
+
+<rect x="326" y="66" width="104" height="46" rx="23" fill="#22C55E" stroke="#0B2530" stroke-width="6"/>
+<circle cx="406" cy="89" r="17" fill="#FFFFFF" stroke="#0B2530" stroke-width="5"/>
+
+<circle cx="128" cy="132" r="30" fill="#0090B5" stroke="#0B2530" stroke-width="6"/>
+<circle cx="218" cy="126" r="30" fill="#0090B5" stroke="#0B2530" stroke-width="6"/>
+
+<circle cx="173" cy="196" r="82" fill="#00ADD8" stroke="#0B2530" stroke-width="6"/>
+
+<ellipse cx="146" cy="186" rx="17" ry="21" fill="#FFFFFF" stroke="#0B2530" stroke-width="5"/>
+<ellipse cx="202" cy="184" rx="17" ry="21" fill="#FFFFFF" stroke="#0B2530" stroke-width="5"/>
+<circle cx="150" cy="191" r="7" fill="#0B2530"/>
+<circle cx="206" cy="189" r="7" fill="#0B2530"/>
+
+<ellipse cx="173" cy="224" rx="9" ry="7" fill="#0B2530"/>
+
+<rect x="156" y="232" width="16" height="24" rx="3" fill="#FFFFFF" stroke="#0B2530" stroke-width="4"/>
+<rect x="176" y="232" width="16" height="24" rx="3" fill="#FFFFFF" stroke="#0B2530" stroke-width="4"/>
+</svg>
