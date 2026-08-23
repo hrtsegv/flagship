@@ -43,9 +43,10 @@ repository:
 
 - Create/list **projects**
 - Create/list **environments** (scoped to a project)
-- Create/list/get/update **boolean feature flags** (scoped to an environment)
+- Create/list/get/update/delete **boolean feature flags** (scoped to an
+  environment) — a deleted flag's key becomes reusable
 - Server-generated IDs, enforced key-uniqueness invariants, and a
-  version counter that increments on every flag update
+  version counter that increments on every flag mutation, including deletes
 - `GET .../configuration` — an environment's full current config plus a
   configuration version (its own counter, independent of any single flag's
   version) — the sync protocol's authoritative recovery endpoint, below

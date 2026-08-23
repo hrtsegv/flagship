@@ -19,6 +19,10 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	}
 }
 
+func writeNoContent(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type errorResponse struct {
 	Error errorBody `json:"error"`
 }

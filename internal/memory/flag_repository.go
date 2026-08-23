@@ -96,6 +96,25 @@ func (r *FlagRepository) Update(ctx context.Context, id string, patch domain.Fla
 	return f, nil
 }
 
+// Delete removes the flag with the given ID, returning domain.ErrNotFound
+// if it does not exist. Its key becomes available for reuse within the
+// same environment, and the environment's configuration version is
+// incremented — deletion is a mutating event like Create and Update.
+func (r *FlagRepository) Delete(ctx context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	f, ok := r.byID[id]
+	if !ok {
+		return fmt.Errorf("%w: flag %q", domain.ErrNotFound, id)
+	}
+
+	delete(r.byID, id)
+	delete(r.keys, flagKeyIndex(f.EnvironmentID, f.Key))
+	r.configVersions[f.EnvironmentID]++
+	return nil
+}
+
 // Snapshot returns the current configuration version for environmentID
 // together with its flags, read under a single lock so the two are always
 // consistent with each other (a concurrent Create/Update can never be

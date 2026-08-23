@@ -27,6 +27,7 @@ func NewServer(projects *app.ProjectService, environments *app.EnvironmentServic
 
 	mux.HandleFunc("GET /api/v1/flags/{flagID}", fh.get)
 	mux.HandleFunc("PATCH /api/v1/flags/{flagID}", fh.update)
+	mux.HandleFunc("DELETE /api/v1/flags/{flagID}", fh.delete)
 
 	return mux
 }

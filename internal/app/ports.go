@@ -30,5 +30,6 @@ type FlagRepository interface {
 	ListByEnvironment(ctx context.Context, environmentID string) ([]domain.Flag, error)
 	GetByID(ctx context.Context, id string) (domain.Flag, error)
 	Update(ctx context.Context, id string, patch domain.FlagPatch) (domain.Flag, error)
+	Delete(ctx context.Context, id string) error
 	Snapshot(ctx context.Context, environmentID string) (version int, flags []domain.Flag, err error)
 }

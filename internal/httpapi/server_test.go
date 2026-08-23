@@ -279,6 +279,72 @@ func TestFlags_Update_NotFoundReturns404(t *testing.T) {
 	}
 }
 
+func TestFlags_Delete_ReturnsNoContentAndRemovesFlag(t *testing.T) {
+	h := newTestServer()
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	flag := createFlag(t, h, env.ID)
+
+	rec := doRequest(t, h, http.MethodDelete, "/api/v1/flags/"+flag.ID, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204, body = %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("delete body = %q, want empty", rec.Body.String())
+	}
+
+	rec = doRequest(t, h, http.MethodGet, "/api/v1/flags/"+flag.ID, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get after delete status = %d, want 404", rec.Code)
+	}
+}
+
+func TestFlags_Delete_NotFoundReturns404(t *testing.T) {
+	h := newTestServer()
+
+	rec := doRequest(t, h, http.MethodDelete, "/api/v1/flags/missing", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestFlags_Delete_KeyBecomesReusable(t *testing.T) {
+	h := newTestServer()
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	flag := createFlag(t, h, env.ID)
+
+	doRequest(t, h, http.MethodDelete, "/api/v1/flags/"+flag.ID, nil)
+
+	rec := doRequest(t, h, http.MethodPost, "/api/v1/environments/"+env.ID+"/flags", createFlagRequest{
+		Key: "new-checkout", Name: "New Checkout Again",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("recreate after delete status = %d, want 201, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConfiguration_ReflectsDeletion(t *testing.T) {
+	h := newTestServer()
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	flag := createFlag(t, h, env.ID)
+
+	doRequest(t, h, http.MethodDelete, "/api/v1/flags/"+flag.ID, nil)
+
+	rec := doRequest(t, h, http.MethodGet, "/api/v1/environments/"+env.ID+"/configuration", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	cfg := decodeBody[configurationResponse](t, rec)
+	if cfg.Version != 2 {
+		t.Errorf("Version = %d, want 2 after create+delete", cfg.Version)
+	}
+	if len(cfg.Flags) != 0 {
+		t.Errorf("Flags = %+v, want empty after deletion", cfg.Flags)
+	}
+}
+
 func TestConfiguration_ReturnsCurrentFlagsAndVersion(t *testing.T) {
 	h := newTestServer()
 	project := createProject(t, h)

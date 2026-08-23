@@ -174,6 +174,74 @@ func TestFlagRepository_Update_ConcurrentIncrementsAreSerialized(t *testing.T) {
 	}
 }
 
+func TestFlagRepository_Delete(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Delete(ctx, "1"); err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+
+	if _, err := repo.GetByID(ctx, "1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("GetByID() after Delete() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFlagRepository_Delete_NotFound(t *testing.T) {
+	repo := NewFlagRepository()
+	err := repo.Delete(context.Background(), "missing")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Delete() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFlagRepository_Delete_KeyBecomesReusable(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Delete(ctx, "1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "2", EnvironmentID: "e1", Key: "new-checkout"}); err != nil {
+		t.Fatalf("Create() after Delete() unexpected error: %v, want the key to be reusable", err)
+	}
+}
+
+func TestFlagRepository_Delete_IncrementsConfigVersionAndScopesSnapshot(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, domain.Flag{ID: "2", EnvironmentID: "e1", Key: "b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Delete(ctx, "1"); err != nil {
+		t.Fatal(err)
+	}
+
+	version, flags, err := repo.Snapshot(ctx, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != 3 {
+		t.Fatalf("version after 2 creates + 1 delete = %d, want 3", version)
+	}
+	if len(flags) != 1 || flags[0].Key != "b" {
+		t.Fatalf("flags after delete = %+v, want only %q", flags, "b")
+	}
+}
+
 func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {
 	repo := NewFlagRepository()
 

@@ -93,6 +93,11 @@ func (s *FlagService) Update(ctx context.Context, flagID string, patch domain.Fl
 	return s.flags.Update(ctx, flagID, patch)
 }
 
+// Delete removes the flag with the given ID.
+func (s *FlagService) Delete(ctx context.Context, flagID string) error {
+	return s.flags.Delete(ctx, flagID)
+}
+
 // Snapshot verifies environmentID exists and returns its current
 // configuration: the environment itself (so callers can read its Key),
 // the configuration version, and the flags as of that version.

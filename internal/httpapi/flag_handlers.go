@@ -63,6 +63,17 @@ func (h *flagHandler) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toFlagResponse(flag))
 }
 
+func (h *flagHandler) delete(w http.ResponseWriter, r *http.Request) {
+	flagID := r.PathValue("flagID")
+
+	if err := h.svc.Delete(r.Context(), flagID); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeNoContent(w)
+}
+
 func (h *flagHandler) configuration(w http.ResponseWriter, r *http.Request) {
 	environmentID := r.PathValue("environmentID")
 

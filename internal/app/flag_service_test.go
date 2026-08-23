@@ -204,6 +204,35 @@ func TestFlagService_ListByEnvironment_EnvironmentNotFound(t *testing.T) {
 	}
 }
 
+func TestFlagService_Delete(t *testing.T) {
+	ctx := context.Background()
+	projects := memory.NewProjectRepository()
+	environments := memory.NewEnvironmentRepository()
+	env := newEnvironmentForFlagTest(t, ctx, projects, environments)
+
+	svc := NewFlagService(memory.NewFlagRepository(), environments)
+	flag, err := svc.Create(ctx, env.ID, CreateFlagInput{Key: "new-checkout", Name: "New Checkout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(ctx, flag.ID); err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+
+	if _, err := svc.Get(ctx, flag.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Get() after Delete() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFlagService_Delete_NotFound(t *testing.T) {
+	svc := NewFlagService(memory.NewFlagRepository(), memory.NewEnvironmentRepository())
+	err := svc.Delete(context.Background(), "missing")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Delete() error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestFlagService_Snapshot(t *testing.T) {
 	ctx := context.Background()
 	projects := memory.NewProjectRepository()
