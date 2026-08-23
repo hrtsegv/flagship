@@ -1,5 +1,7 @@
 package flagship
 
+import "maps"
+
 // Flag is a boolean feature flag as delivered to the SDK: just enough
 // information to evaluate it locally.
 type Flag struct {
@@ -50,9 +52,7 @@ func (s *Snapshot) flag(key string) (enabled, ok bool) {
 // decisions, it just applies the one delta it's given.
 func (s *Snapshot) nextSnapshot(e ConfigEvent) *Snapshot {
 	flags := make(map[string]bool, len(s.flags)+1)
-	for k, v := range s.flags {
-		flags[k] = v
-	}
+	maps.Copy(flags, s.flags)
 
 	switch e.Type {
 	case EventFlagCreated, EventFlagUpdated:
