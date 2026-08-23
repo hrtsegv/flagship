@@ -63,6 +63,18 @@ func (h *flagHandler) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toFlagResponse(flag))
 }
 
+func (h *flagHandler) configuration(w http.ResponseWriter, r *http.Request) {
+	environmentID := r.PathValue("environmentID")
+
+	env, version, flags, err := h.svc.Snapshot(r.Context(), environmentID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toConfigurationResponse(env, version, flags))
+}
+
 func (h *flagHandler) update(w http.ResponseWriter, r *http.Request) {
 	flagID := r.PathValue("flagID")
 

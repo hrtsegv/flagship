@@ -95,3 +95,26 @@ func toFlagResponse(f domain.Flag) flagResponse {
 		UpdatedAt:     f.UpdatedAt,
 	}
 }
+
+type configurationFlagResponse struct {
+	Key     string `json:"key"`
+	Enabled bool   `json:"enabled"`
+}
+
+type configurationResponse struct {
+	Version     int                         `json:"version"`
+	Environment string                      `json:"environment"`
+	Flags       []configurationFlagResponse `json:"flags"`
+}
+
+func toConfigurationResponse(env domain.Environment, version int, flags []domain.Flag) configurationResponse {
+	resp := configurationResponse{
+		Version:     version,
+		Environment: env.Key,
+		Flags:       make([]configurationFlagResponse, 0, len(flags)),
+	}
+	for _, f := range flags {
+		resp.Flags = append(resp.Flags, configurationFlagResponse{Key: f.Key, Enabled: f.Enabled})
+	}
+	return resp
+}

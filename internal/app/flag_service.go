@@ -92,3 +92,19 @@ func (s *FlagService) Update(ctx context.Context, flagID string, patch domain.Fl
 
 	return s.flags.Update(ctx, flagID, patch)
 }
+
+// Snapshot verifies environmentID exists and returns its current
+// configuration: the environment itself (so callers can read its Key),
+// the configuration version, and the flags as of that version.
+func (s *FlagService) Snapshot(ctx context.Context, environmentID string) (domain.Environment, int, []domain.Flag, error) {
+	env, err := s.environments.GetByID(ctx, environmentID)
+	if err != nil {
+		return domain.Environment{}, 0, nil, err
+	}
+
+	version, flags, err := s.flags.Snapshot(ctx, environmentID)
+	if err != nil {
+		return domain.Environment{}, 0, nil, err
+	}
+	return env, version, flags, nil
+}

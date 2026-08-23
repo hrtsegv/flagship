@@ -279,4 +279,56 @@ func TestFlags_Update_NotFoundReturns404(t *testing.T) {
 	}
 }
 
+func TestConfiguration_ReturnsCurrentFlagsAndVersion(t *testing.T) {
+	h := newTestServer()
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	createFlag(t, h, env.ID)
+
+	rec := doRequest(t, h, http.MethodGet, "/api/v1/environments/"+env.ID+"/configuration", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	cfg := decodeBody[configurationResponse](t, rec)
+	if cfg.Version != 1 {
+		t.Errorf("Version = %d, want 1", cfg.Version)
+	}
+	if cfg.Environment != "production" {
+		t.Errorf("Environment = %q, want %q", cfg.Environment, "production")
+	}
+	if len(cfg.Flags) != 1 || cfg.Flags[0].Key != "new-checkout" || cfg.Flags[0].Enabled {
+		t.Errorf("Flags = %+v, want one disabled new-checkout flag", cfg.Flags)
+	}
+}
+
+func TestConfiguration_VersionIncrementsAfterFlagUpdate(t *testing.T) {
+	h := newTestServer()
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	flag := createFlag(t, h, env.ID)
+
+	doRequest(t, h, http.MethodPatch, "/api/v1/flags/"+flag.ID, updateFlagRequest{Enabled: boolPtr(true)})
+
+	rec := doRequest(t, h, http.MethodGet, "/api/v1/environments/"+env.ID+"/configuration", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	cfg := decodeBody[configurationResponse](t, rec)
+	if cfg.Version != 2 {
+		t.Errorf("Version = %d, want 2 after one flag update", cfg.Version)
+	}
+	if len(cfg.Flags) != 1 || !cfg.Flags[0].Enabled {
+		t.Errorf("Flags = %+v, want one enabled new-checkout flag", cfg.Flags)
+	}
+}
+
+func TestConfiguration_EnvironmentNotFoundReturns404(t *testing.T) {
+	h := newTestServer()
+
+	rec := doRequest(t, h, http.MethodGet, "/api/v1/environments/missing/configuration", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }

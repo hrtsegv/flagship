@@ -203,3 +203,37 @@ func TestFlagService_ListByEnvironment_EnvironmentNotFound(t *testing.T) {
 		t.Fatalf("ListByEnvironment() error = %v, want ErrNotFound", err)
 	}
 }
+
+func TestFlagService_Snapshot(t *testing.T) {
+	ctx := context.Background()
+	projects := memory.NewProjectRepository()
+	environments := memory.NewEnvironmentRepository()
+	env := newEnvironmentForFlagTest(t, ctx, projects, environments)
+
+	svc := NewFlagService(memory.NewFlagRepository(), environments)
+	if _, err := svc.Create(ctx, env.ID, CreateFlagInput{Key: "new-checkout", Name: "New Checkout", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	gotEnv, version, flags, err := svc.Snapshot(ctx, env.ID)
+	if err != nil {
+		t.Fatalf("Snapshot() unexpected error: %v", err)
+	}
+	if gotEnv.Key != "production" {
+		t.Errorf("Snapshot() environment key = %q, want %q", gotEnv.Key, "production")
+	}
+	if version != 1 {
+		t.Errorf("Snapshot() version = %d, want 1", version)
+	}
+	if len(flags) != 1 || flags[0].Key != "new-checkout" || !flags[0].Enabled {
+		t.Errorf("Snapshot() flags = %+v, want one enabled new-checkout flag", flags)
+	}
+}
+
+func TestFlagService_Snapshot_EnvironmentNotFound(t *testing.T) {
+	svc := NewFlagService(memory.NewFlagRepository(), memory.NewEnvironmentRepository())
+	_, _, _, err := svc.Snapshot(context.Background(), "missing")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Snapshot() error = %v, want ErrNotFound", err)
+	}
+}

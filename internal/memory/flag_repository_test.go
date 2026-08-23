@@ -174,6 +174,94 @@ func TestFlagRepository_Update_ConcurrentIncrementsAreSerialized(t *testing.T) {
 	}
 }
 
+func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {
+	repo := NewFlagRepository()
+
+	version, flags, err := repo.Snapshot(context.Background(), "e1")
+	if err != nil {
+		t.Fatalf("Snapshot() unexpected error: %v", err)
+	}
+	if version != 0 {
+		t.Errorf("Snapshot() version = %d, want 0 for an environment with no flags yet", version)
+	}
+	if len(flags) != 0 {
+		t.Errorf("Snapshot() flags = %v, want empty", flags)
+	}
+}
+
+func TestFlagRepository_Snapshot_IncrementsOnCreateAndUpdate(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	version, _, err := repo.Snapshot(ctx, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Fatalf("version after first create = %d, want 1", version)
+	}
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "2", EnvironmentID: "e1", Key: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	version, flags, err := repo.Snapshot(ctx, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 {
+		t.Fatalf("version after second create = %d, want 2", version)
+	}
+	if len(flags) != 2 {
+		t.Fatalf("flags after second create = %d, want 2", len(flags))
+	}
+
+	enabled := true
+	if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	version, _, err = repo.Snapshot(ctx, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != 3 {
+		t.Fatalf("version after update = %d, want 3", version)
+	}
+}
+
+func TestFlagRepository_Snapshot_ScopedToEnvironment(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, domain.Flag{ID: "2", EnvironmentID: "e2", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, domain.Flag{ID: "3", EnvironmentID: "e2", Key: "b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	v1, f1, err := repo.Snapshot(ctx, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1 != 1 || len(f1) != 1 {
+		t.Fatalf("e1 snapshot = (version %d, %d flags), want (1, 1)", v1, len(f1))
+	}
+
+	v2, f2, err := repo.Snapshot(ctx, "e2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2 != 2 || len(f2) != 2 {
+		t.Fatalf("e2 snapshot = (version %d, %d flags), want (2, 2)", v2, len(f2))
+	}
+}
+
 func TestProjectRepository_Create_ConcurrentDistinctKeys(t *testing.T) {
 	ctx := context.Background()
 	repo := NewProjectRepository()

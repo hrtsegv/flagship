@@ -12,16 +12,18 @@ import (
 
 // FlagRepository is an in-memory store of flags, safe for concurrent use.
 type FlagRepository struct {
-	mu   sync.RWMutex
-	byID map[string]domain.Flag
-	keys map[string]struct{} // "environmentID\x00key" -> exists
+	mu             sync.RWMutex
+	byID           map[string]domain.Flag
+	keys           map[string]struct{} // "environmentID\x00key" -> exists
+	configVersions map[string]int      // environmentID -> configuration version
 }
 
 // NewFlagRepository returns an empty FlagRepository.
 func NewFlagRepository() *FlagRepository {
 	return &FlagRepository{
-		byID: make(map[string]domain.Flag),
-		keys: make(map[string]struct{}),
+		byID:           make(map[string]domain.Flag),
+		keys:           make(map[string]struct{}),
+		configVersions: make(map[string]int),
 	}
 }
 
@@ -42,6 +44,7 @@ func (r *FlagRepository) Create(ctx context.Context, flag domain.Flag) (domain.F
 
 	r.byID[flag.ID] = flag
 	r.keys[index] = struct{}{}
+	r.configVersions[flag.EnvironmentID]++
 	return flag, nil
 }
 
@@ -89,5 +92,24 @@ func (r *FlagRepository) Update(ctx context.Context, id string, patch domain.Fla
 
 	f.Apply(patch, time.Now().UTC())
 	r.byID[id] = f
+	r.configVersions[f.EnvironmentID]++
 	return f, nil
+}
+
+// Snapshot returns the current configuration version for environmentID
+// together with its flags, read under a single lock so the two are always
+// consistent with each other (a concurrent Create/Update can never be
+// reflected in one but not the other).
+func (r *FlagRepository) Snapshot(ctx context.Context, environmentID string) (version int, flags []domain.Flag, err error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]domain.Flag, 0)
+	for _, f := range r.byID {
+		if f.EnvironmentID == environmentID {
+			out = append(out, f)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return r.configVersions[environmentID], out, nil
 }
