@@ -213,10 +213,6 @@ Roughly in order:
 - [ ] Audit history and rollback
 - [ ] Authentication/authorization
 
-This is a learning/portfolio project, not an attempt to match a mature
-platform feature-for-feature — see the design principles above for the
-constraints guiding what gets built next.
-
 ## Project layout
 
 ```text
