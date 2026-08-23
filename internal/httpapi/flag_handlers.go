@@ -168,9 +168,9 @@ func (h *flagHandler) stream(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeConfigEvent writes one SSE frame for e and reports whether the
-// write succeeded. The event ID is the configuration version itself (see
-// ADR-0004) -- no separate ID is needed, and it's what a reconnecting
-// client echoes back as Last-Event-ID to resume.
+// write succeeded. The event ID is the configuration version itself -- no
+// separate ID is needed, and it's what a reconnecting client echoes back
+// as Last-Event-ID to resume.
 func writeConfigEvent(w http.ResponseWriter, environmentKey string, e domain.ConfigEvent) bool {
 	data, err := json.Marshal(toConfigEventPayload(environmentKey, e))
 	if err != nil {

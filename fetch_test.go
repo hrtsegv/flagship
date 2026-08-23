@@ -67,9 +67,9 @@ func TestFetchSnapshot_InvalidJSON(t *testing.T) {
 }
 
 // TestApplyEvent_GapRecovery_AgainstRealServer exercises the full recovery
-// path from ADR-0004 end-to-end: a client detects a version gap, recovers
-// by calling FetchSnapshot against a real running control plane (not a
-// stub), and installs the result via UpdateSnapshot.
+// path end-to-end: a client detects a version gap, recovers by calling
+// FetchSnapshot against a real running control plane (not a stub), and
+// installs the result via UpdateSnapshot.
 func TestApplyEvent_GapRecovery_AgainstRealServer(t *testing.T) {
 	projectRepo := memory.NewProjectRepository()
 	environmentRepo := memory.NewEnvironmentRepository()

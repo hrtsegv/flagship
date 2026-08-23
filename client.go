@@ -87,9 +87,8 @@ func (c *Client) UpdateSnapshot(next *Snapshot) bool {
 }
 
 // ApplyEvent attempts to advance the client by exactly one configuration
-// event, per the versioned sync protocol (see ADR-0004): events are
-// applied strictly sequentially, and any gap is left for the caller to
-// recover rather than guessed at.
+// event: events are applied strictly sequentially, and any gap is left
+// for the caller to recover rather than guessed at.
 //
 //   - If the client has no snapshot yet, or e.Version is more than one
 //     past the client's current version, ApplyEvent returns

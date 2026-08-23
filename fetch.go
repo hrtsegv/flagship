@@ -21,9 +21,9 @@ type configurationPayload struct {
 // running Flagship server and builds a Snapshot from it. httpClient may be
 // nil, in which case http.DefaultClient is used.
 //
-// This is the sync protocol's one authoritative source of full state (see
-// ADR-0004): it's used both to bootstrap a Client and, when
-// Client.ApplyEvent reports ErrVersionGap, to recover from one.
+// This is the sync protocol's one authoritative source of full state: it's
+// used both to bootstrap a Client and, when Client.ApplyEvent reports
+// ErrVersionGap, to recover from one.
 func FetchSnapshot(ctx context.Context, httpClient *http.Client, baseURL, environmentID string) (*Snapshot, error) {
 	if httpClient == nil {
 		httpClient = http.DefaultClient

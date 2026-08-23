@@ -45,12 +45,12 @@ func (cfg SyncConfig) validate() error {
 	return nil
 }
 
-// Sync is the SDK's side of the versioned push transport (see ADR-0004):
-// it connects to the control plane's SSE stream, applies each ConfigEvent
-// it receives to client via ApplyEvent, and recovers from any version gap
-// by fetching a full snapshot, all without the caller managing any of
-// that by hand. Most application code only needs Bool; Sync is what keeps
-// the Snapshot behind it current.
+// Sync is the SDK's side of the versioned push transport: it connects to
+// the control plane's SSE stream, applies each ConfigEvent it receives to
+// client via ApplyEvent, and recovers from any version gap by fetching a
+// full snapshot, all without the caller managing any of that by hand.
+// Most application code only needs Bool; Sync is what keeps the Snapshot
+// behind it current.
 //
 // Sync blocks until ctx is canceled (or a permanent, non-retryable error
 // occurs) and is meant to be run in its own goroutine:
@@ -207,10 +207,9 @@ func connectAndStream(ctx context.Context, client *Client, httpClient *http.Clie
 	}
 }
 
-// configEventPayload mirrors the server's internal/httpapi.configEventPayload
-// (docs/api.md §6). The two aren't the same Go type on purpose: this is
-// the wire contract as the SDK understands it, independent of the control
-// plane's implementation.
+// configEventPayload mirrors the server's internal/httpapi.configEventPayload.
+// The two aren't the same Go type on purpose: this is the wire contract as
+// the SDK understands it, independent of the control plane's implementation.
 type configEventPayload struct {
 	Environment string `json:"environment"`
 	Version     int    `json:"version"`
