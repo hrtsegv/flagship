@@ -10,8 +10,9 @@ ramping it out gradually — without redeploying.
 
 > **Status:** actively in development. The control plane (projects,
 > environments, boolean flags), a local-evaluation Go SDK, and a versioned
-> config-sync protocol — including a live SSE push transport — are working
-> end-to-end on the server side. See [Roadmap](#roadmap) for what's next.
+> config-sync protocol with a live SSE push transport are all working
+> end-to-end — server and SDK client both. See [Roadmap](#roadmap) for
+> what's next.
 
 ## Why
 
@@ -69,12 +70,15 @@ evaluation, plus the client-side half of the versioned sync protocol:
   snapshot yet) reports `ErrVersionGap` instead of guessing
 - `FetchSnapshot` — the one recovery mechanism for every kind of gap: fetch
   the authoritative configuration and install it wholesale
+- `flagship.Sync` — run it in a goroutine and it connects to `/stream`,
+  applies events as they arrive, recovers from a gap on the *same*
+  connection (no reconnect needed), and reconnects with jittered
+  exponential backoff if the connection drops
 
-**What's intentionally not built yet:** the SDK's side of the SSE transport
-(connect to `/stream`, feed events to `ApplyEvent`, reconnect with backoff
-on failure), persistence (PostgreSQL), targeting rules, percentage
-rollouts, authentication, audit history, a dashboard. See
-[Roadmap](#roadmap).
+**What's intentionally not built yet:** persistence (PostgreSQL), targeting
+rules, percentage rollouts, authentication, audit history, a dashboard, and
+— closing the loop on all of the above — a standalone example application
+that actually runs `Sync` end-to-end. See [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -114,18 +118,22 @@ curl -s -N localhost:8080/api/v1/environments/<environmentID>/stream
 # (stays open; further flag changes appear here live, in real time)
 ```
 
-There's no SDK client for `/stream` yet (see Roadmap) — the server side
-above is what a future SDK sync loop will connect to. Today, `FetchSnapshot`
-talks to the configuration endpoint for a one-shot fetch:
+From a Go application, `flagship.Sync` is the client for that stream —
+bootstrap, connect, and keep applying events, all in one call:
 
 ```go
-snapshot, _ := flagship.FetchSnapshot(ctx, nil, "http://localhost:8080", environmentID)
-client := flagship.NewClient(snapshot)
-fmt.Println(client.Bool("new-checkout", false))
+client := flagship.NewClient(nil)
+go flagship.Sync(ctx, client, flagship.SyncConfig{
+	BaseURL:       "http://localhost:8080",
+	EnvironmentID: environmentID,
+})
+// client.Bool("new-checkout", false) now reflects live changes to the
+// flag, made through the API above, with no restart and no polling.
 ```
 
-or a `Snapshot` can be constructed directly, which is enough to evaluate
-flags locally without a server at all:
+`FetchSnapshot` alone is still there for a one-shot fetch with no live
+updates, and a `Snapshot` can be constructed directly, which is enough to
+evaluate flags locally without a server at all:
 
 ```go
 package main
@@ -170,9 +178,9 @@ HTTP transport  →  application/use cases  →  domain  →  repository
 The **SDK** (root package) is deliberately independent of all of the above —
 it has no import of `internal/httpapi` or `internal/memory`, and never will.
 It's the data-plane half of the system: give it a `Snapshot`, and it
-evaluates flags against it in memory. How that snapshot gets there (direct
-construction or a one-shot `FetchSnapshot` today; a live push transport
-later) is a separate concern the SDK doesn't need to know about.
+evaluates flags against it in memory. How that snapshot gets there —
+constructed directly, fetched once with `FetchSnapshot`, or kept live with
+`Sync` — is a separate concern the SDK doesn't need to know about.
 
 ## Design decisions worth knowing about
 
@@ -217,10 +225,14 @@ create/get/list/update/delete flow and its error responses, the SDK's
 evaluation/fallback/versioning/concurrency behavior (including snapshot
 replacement racing against concurrent reads), the sync protocol
 (sequential apply, stale/duplicate/gap handling, and gap recovery against
-a real running server, not just a mock), and the SSE transport (replay,
-live delivery, the replay→live handoff proven gap/duplicate-free with a
+a real running server, not just a mock), the SSE transport (replay, live
+delivery, the replay→live handoff proven gap/duplicate-free with a
 deterministic concurrency test, slow-consumer non-blocking behavior, and
-an end-to-end run against a real streamed HTTP connection).
+an end-to-end run against a real streamed HTTP connection), and `Sync`
+itself (reconnect-after-drop with backoff, in-place gap recovery proven to
+need exactly one connection, failing fast instead of retrying on a
+wrong-environment event, and applying a real flag update end-to-end
+against the real control plane with no polling).
 
 ## Roadmap
 
@@ -228,7 +240,8 @@ Roughly in order:
 
 - [x] Versioned sync protocol foundation (`ApplyEvent`, gap detection, snapshot recovery)
 - [x] Server-side SSE transport (`/stream`, event log, replay-on-reconnect)
-- [ ] SDK-side SSE client (connect, apply events, reconnect with backoff)
+- [x] SDK-side SSE client (`flagship.Sync` — connect, apply events, reconnect with backoff)
+- [ ] Example application demonstrating the full loop end-to-end
 - [ ] PostgreSQL persistence for the control plane
 - [ ] Targeting rules (evaluate against request attributes like country/plan)
 - [ ] Deterministic percentage rollouts
@@ -248,4 +261,7 @@ client.go           SDK: Client, Bool(), ApplyEvent()
 snapshot.go         SDK: Snapshot, Flag
 event.go            SDK: ConfigEvent, the sync protocol's wire event
 fetch.go            SDK: FetchSnapshot — bootstrap + gap recovery
+sse.go              SDK: Server-Sent Events frame parsing
+backoff.go          SDK: jittered exponential backoff for reconnects
+sync.go             SDK: Sync — the SSE client, wired to ApplyEvent
 ```
