@@ -233,6 +233,37 @@ func TestFlagService_Delete_NotFound(t *testing.T) {
 	}
 }
 
+func TestFlagService_EventsSince(t *testing.T) {
+	ctx := context.Background()
+	projects := memory.NewProjectRepository()
+	environments := memory.NewEnvironmentRepository()
+	env := newEnvironmentForFlagTest(t, ctx, projects, environments)
+
+	svc := NewFlagService(memory.NewFlagRepository(), environments)
+	if _, err := svc.Create(ctx, env.ID, CreateFlagInput{Key: "new-checkout", Name: "New Checkout", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, replayable, err := svc.EventsSince(ctx, env.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsSince() unexpected error: %v", err)
+	}
+	if !replayable {
+		t.Fatal("replayable = false, want true")
+	}
+	if len(events) != 1 || events[0].Type != domain.ConfigEventFlagCreated || events[0].FlagKey != "new-checkout" {
+		t.Fatalf("events = %+v, want a single flag_created event for new-checkout", events)
+	}
+}
+
+func TestFlagService_EventsSince_EnvironmentNotFound(t *testing.T) {
+	svc := NewFlagService(memory.NewFlagRepository(), memory.NewEnvironmentRepository())
+	_, _, err := svc.EventsSince(context.Background(), "missing", 0)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("EventsSince() error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestFlagService_Snapshot(t *testing.T) {
 	ctx := context.Background()
 	projects := memory.NewProjectRepository()

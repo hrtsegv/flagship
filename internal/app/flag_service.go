@@ -98,6 +98,17 @@ func (s *FlagService) Delete(ctx context.Context, flagID string) error {
 	return s.flags.Delete(ctx, flagID)
 }
 
+// EventsSince verifies environmentID exists and returns the events a
+// client resuming from sinceVersion missed, along with whether replaying
+// them is sufficient to bring that client up to date. When it isn't, the
+// caller must fall back to Snapshot.
+func (s *FlagService) EventsSince(ctx context.Context, environmentID string, sinceVersion int) ([]domain.ConfigEvent, bool, error) {
+	if _, err := s.environments.GetByID(ctx, environmentID); err != nil {
+		return nil, false, err
+	}
+	return s.flags.EventsSince(ctx, environmentID, sinceVersion)
+}
+
 // Snapshot verifies environmentID exists and returns its current
 // configuration: the environment itself (so callers can read its Key),
 // the configuration version, and the flags as of that version.

@@ -242,6 +242,202 @@ func TestFlagRepository_Delete_IncrementsConfigVersionAndScopesSnapshot(t *testi
 	}
 }
 
+func TestFlagRepository_EventsSince_RecordsEachMutation(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Delete(ctx, "1"); err != nil {
+		t.Fatal(err)
+	}
+
+	events, replayable, err := repo.EventsSince(ctx, "e1", 0)
+	if err != nil {
+		t.Fatalf("EventsSince() unexpected error: %v", err)
+	}
+	if !replayable {
+		t.Fatal("replayable = false, want true when the full history is retained")
+	}
+
+	want := []domain.ConfigEvent{
+		{EnvironmentID: "e1", Version: 1, Type: domain.ConfigEventFlagCreated, FlagKey: "a", Enabled: false},
+		{EnvironmentID: "e1", Version: 2, Type: domain.ConfigEventFlagUpdated, FlagKey: "a", Enabled: true},
+		{EnvironmentID: "e1", Version: 3, Type: domain.ConfigEventFlagDeleted, FlagKey: "a", Enabled: false},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("got %d events, want %d: %+v", len(events), len(want), events)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Errorf("event %d = %+v, want %+v", i, events[i], want[i])
+		}
+	}
+}
+
+func TestFlagRepository_EventsSince_ReturnsOnlyNewerEvents(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, domain.Flag{ID: "2", EnvironmentID: "e1", Key: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, domain.Flag{ID: "3", EnvironmentID: "e1", Key: "c"}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, replayable, err := repo.EventsSince(ctx, "e1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayable {
+		t.Fatal("replayable = false, want true")
+	}
+	if len(events) != 2 || events[0].Version != 2 || events[1].Version != 3 {
+		t.Fatalf("events = %+v, want versions 2 and 3 only", events)
+	}
+}
+
+func TestFlagRepository_EventsSince_AlreadyCurrent(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, replayable, err := repo.EventsSince(ctx, "e1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayable {
+		t.Fatal("replayable = false, want true for a client that is already current")
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want none", events)
+	}
+}
+
+func TestFlagRepository_EventsSince_FreshEnvironment(t *testing.T) {
+	repo := NewFlagRepository()
+
+	events, replayable, err := repo.EventsSince(context.Background(), "e1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayable {
+		t.Fatal("replayable = false, want true for a fresh environment at version 0")
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want none", events)
+	}
+}
+
+func TestFlagRepository_EventsSince_AheadOfServerIsNotReplayable(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, replayable, err := repo.EventsSince(ctx, "e1", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayable {
+		t.Fatal("replayable = true, want false when the client claims a version ahead of the server")
+	}
+}
+
+func TestFlagRepository_EventsSince_TrimmedHistoryIsNotReplayable(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	// One create + this many updates pushes the history one past the cap,
+	// so the create (version 1) is dropped and version 2 becomes oldest.
+	enabled := true
+	for i := 0; i < maxRetainedEventsPerEnvironment; i++ {
+		if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A client at version 0 needs version 1, which is gone.
+	if _, replayable, err := repo.EventsSince(ctx, "e1", 0); err != nil {
+		t.Fatal(err)
+	} else if replayable {
+		t.Error("replayable = true for a client needing trimmed events, want false")
+	}
+
+	// A client at version 1 needs version 2 onward, which is still retained.
+	events, replayable, err := repo.EventsSince(ctx, "e1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayable {
+		t.Fatal("replayable = false at the retention boundary, want true")
+	}
+	if len(events) != maxRetainedEventsPerEnvironment || events[0].Version != 2 {
+		t.Fatalf("got %d events starting at version %d, want %d starting at version 2",
+			len(events), events[0].Version, maxRetainedEventsPerEnvironment)
+	}
+}
+
+func TestFlagRepository_EventsSince_ScopedToEnvironment(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, domain.Flag{ID: "2", EnvironmentID: "e2", Key: "b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err := repo.EventsSince(ctx, "e1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].FlagKey != "a" {
+		t.Fatalf("e1 events = %+v, want only the flag %q event", events, "a")
+	}
+}
+
+func TestFlagRepository_EventsSince_ReturnsIndependentSlice(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err := repo.EventsSince(ctx, "e1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events[0].FlagKey = "mutated-by-caller"
+
+	again, _, err := repo.EventsSince(ctx, "e1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again[0].FlagKey != "a" {
+		t.Errorf("stored event was mutated through the returned slice: FlagKey = %q", again[0].FlagKey)
+	}
+}
+
 func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {
 	repo := NewFlagRepository()
 

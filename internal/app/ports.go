@@ -32,4 +32,5 @@ type FlagRepository interface {
 	Update(ctx context.Context, id string, patch domain.FlagPatch) (domain.Flag, error)
 	Delete(ctx context.Context, id string) error
 	Snapshot(ctx context.Context, environmentID string) (version int, flags []domain.Flag, err error)
+	EventsSince(ctx context.Context, environmentID string, sinceVersion int) (events []domain.ConfigEvent, replayable bool, err error)
 }
