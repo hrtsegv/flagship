@@ -42,3 +42,24 @@ func (s *Snapshot) flag(key string) (enabled, ok bool) {
 	enabled, ok = s.flags[key]
 	return enabled, ok
 }
+
+// nextSnapshot returns a new Snapshot reflecting e applied on top of s: a
+// copy of s's flags with e's one change made, at e.Version. The caller
+// (Client.ApplyEvent) is responsible for only calling this when e.Version
+// is exactly s.version+1 — nextSnapshot itself makes no sequencing
+// decisions, it just applies the one delta it's given.
+func (s *Snapshot) nextSnapshot(e ConfigEvent) *Snapshot {
+	flags := make(map[string]bool, len(s.flags)+1)
+	for k, v := range s.flags {
+		flags[k] = v
+	}
+
+	switch e.Type {
+	case EventFlagCreated, EventFlagUpdated:
+		flags[e.FlagKey] = e.Enabled
+	case EventFlagDeleted:
+		delete(flags, e.FlagKey)
+	}
+
+	return &Snapshot{environment: s.environment, version: e.Version, flags: flags}
+}

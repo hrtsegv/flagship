@@ -6,7 +6,25 @@
 // snapshot replaces it atomically (see Client.UpdateSnapshot).
 package flagship
 
-import "sync/atomic"
+import (
+	"errors"
+	"sync/atomic"
+)
+
+// ErrVersionGap is returned by Client.ApplyEvent when the event cannot be
+// safely applied on top of the client's current snapshot: either the
+// client has no snapshot yet, or the event's version is more than one
+// past the client's current version. Either way, the caller must recover
+// by fetching and installing a full, authoritative snapshot (e.g.
+// FetchSnapshot + UpdateSnapshot) rather than guessing at the missing
+// state.
+var ErrVersionGap = errors.New("flagship: event does not sequentially follow the client's current snapshot")
+
+// ErrWrongEnvironment is returned by Client.ApplyEvent when the event's
+// Environment doesn't match the client's current snapshot. This signals
+// caller misuse (an event routed to the wrong client), not a normal gap
+// in the protocol.
+var ErrWrongEnvironment = errors.New("flagship: event environment does not match the client's current snapshot")
 
 // Client evaluates feature flags against a locally held configuration
 // snapshot. It is safe for concurrent use by multiple goroutines.
@@ -46,12 +64,13 @@ func (c *Client) Bool(key string, defaultValue bool) bool {
 // snapshot yet), and reports whether it was applied.
 //
 // An incoming snapshot with an equal or older version than the current one
-// is rejected as a no-op rather than an error, since a future poller will
-// call this on every poll and most polls won't observe a version change.
+// is rejected as a no-op rather than an error, since callers (a full
+// bootstrap fetch, or recovery after ApplyEvent reports ErrVersionGap) may
+// reasonably fetch a snapshot that turns out to already be current.
 //
-// UpdateSnapshot exists for a future configuration-sync mechanism
-// (polling/SSE) to install new configuration as it arrives; most
-// application code only needs Bool.
+// UpdateSnapshot exists for a future configuration-sync mechanism to
+// install new configuration as it arrives; most application code only
+// needs Bool.
 func (c *Client) UpdateSnapshot(next *Snapshot) bool {
 	if next == nil {
 		return false
@@ -63,6 +82,40 @@ func (c *Client) UpdateSnapshot(next *Snapshot) bool {
 		}
 		if c.snapshot.CompareAndSwap(current, next) {
 			return true
+		}
+	}
+}
+
+// ApplyEvent attempts to advance the client by exactly one configuration
+// event, per the versioned sync protocol (see ADR-0004): events are
+// applied strictly sequentially, and any gap is left for the caller to
+// recover rather than guessed at.
+//
+//   - If the client has no snapshot yet, or e.Version is more than one
+//     past the client's current version, ApplyEvent returns
+//     ErrVersionGap without changing state. The caller must recover by
+//     fetching and installing a full snapshot instead.
+//   - If e.Version is less than or equal to the client's current
+//     version, e is a stale or duplicate event: it's silently ignored,
+//     and ApplyEvent returns (false, nil).
+//   - If e.Environment doesn't match the client's current snapshot,
+//     ApplyEvent returns ErrWrongEnvironment without changing state.
+//   - Otherwise e is applied atomically and ApplyEvent returns (true, nil).
+func (c *Client) ApplyEvent(e ConfigEvent) (applied bool, err error) {
+	for {
+		current := c.snapshot.Load()
+		if current == nil || e.Version > current.version+1 {
+			return false, ErrVersionGap
+		}
+		if current.environment != e.Environment {
+			return false, ErrWrongEnvironment
+		}
+		if e.Version <= current.version {
+			return false, nil
+		}
+		next := current.nextSnapshot(e)
+		if c.snapshot.CompareAndSwap(current, next) {
+			return true, nil
 		}
 	}
 }
