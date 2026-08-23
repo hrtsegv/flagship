@@ -9,8 +9,9 @@ change application behavior at runtime — enabling a feature, rolling it back,
 ramping it out gradually — without redeploying.
 
 > **Status:** actively in development. The control plane (projects,
-> environments, boolean flags) and a local-evaluation Go SDK are working
-> end-to-end. See [Roadmap](#roadmap) for what's next.
+> environments, boolean flags), a local-evaluation Go SDK, and the
+> foundation of a versioned config-sync protocol are working end-to-end.
+> See [Roadmap](#roadmap) for what's next.
 
 ## Why
 
@@ -45,23 +46,29 @@ repository:
 - Create/list/get/update **boolean feature flags** (scoped to an environment)
 - Server-generated IDs, enforced key-uniqueness invariants, and a
   version counter that increments on every flag update
+- `GET .../configuration` — an environment's full current config plus a
+  configuration version (its own counter, independent of any single flag's
+  version) — the sync protocol's authoritative recovery endpoint, below
 - Consistent JSON error responses (`404` for missing resources, `409` for
   key conflicts, `400` for validation failures)
 
 **Go SDK** (root package, `flagship`) — local, concurrency-safe boolean flag
-evaluation:
+evaluation, plus the foundation of a versioned sync protocol:
 
 - `client.Bool(key, default)` never makes a network call and never returns a
   zero value in place of your fallback
 - An immutable, versioned configuration `Snapshot` that the client holds
   behind an atomic pointer — safe to read from many goroutines while a new
   snapshot is being installed
-- Version-aware snapshot replacement: a snapshot only replaces the current
-  one if its version is strictly newer
+- `Client.ApplyEvent` applies one versioned `ConfigEvent` at a time, strictly
+  sequentially: stale/duplicate events are ignored, and any gap (or no
+  snapshot yet) reports `ErrVersionGap` instead of guessing
+- `FetchSnapshot` — the one recovery mechanism for every kind of gap: fetch
+  the authoritative configuration and install it wholesale
 
-**What's intentionally not built yet:** persistence (PostgreSQL), pushing
-configuration from the server to the SDK (polling/SSE), targeting rules,
-percentage rollouts, authentication, audit history, a dashboard. See
+**What's intentionally not built yet:** the actual transport that delivers
+`ConfigEvent`s (SSE), persistence (PostgreSQL), targeting rules, percentage
+rollouts, authentication, audit history, a dashboard. See
 [Roadmap](#roadmap).
 
 ## Quick start
@@ -90,11 +97,22 @@ curl -s -X POST localhost:8080/api/v1/environments/<environmentID>/flags \
 curl -s -X PATCH localhost:8080/api/v1/flags/<flagID> \
   -H "Content-Type: application/json" \
   -d '{"enabled":true}'
+
+curl -s localhost:8080/api/v1/environments/<environmentID>/configuration
+# {"version":2,"environment":"production","flags":[{"key":"new-checkout","enabled":true}]}
 ```
 
-Use the SDK from a Go application. Today the SDK is fed a snapshot directly
-(there's no sync mechanism yet — that's the next milestone), which is enough
-to evaluate flags locally:
+Use the SDK from a Go application. There's no live transport yet (see
+Roadmap), but `FetchSnapshot` already talks to the endpoint above:
+
+```go
+snapshot, _ := flagship.FetchSnapshot(ctx, nil, "http://localhost:8080", environmentID)
+client := flagship.NewClient(snapshot)
+fmt.Println(client.Bool("new-checkout", false))
+```
+
+or a `Snapshot` can be constructed directly, which is enough to evaluate
+flags locally without a server at all:
 
 ```go
 package main
@@ -140,8 +158,8 @@ The **SDK** (root package) is deliberately independent of all of the above —
 it has no import of `internal/httpapi` or `internal/memory`, and never will.
 It's the data-plane half of the system: give it a `Snapshot`, and it
 evaluates flags against it in memory. How that snapshot gets there (direct
-construction today; polling or push-based sync later) is a separate concern
-the SDK doesn't need to know about.
+construction or a one-shot `FetchSnapshot` today; a live push transport
+later) is a separate concern the SDK doesn't need to know about.
 
 ## Design decisions worth knowing about
 
@@ -155,8 +173,13 @@ the SDK doesn't need to know about.
   lock contention on the read path.
 - **Versions are compared, not trusted.** Installing a snapshot only
   succeeds if its version is strictly newer than what's currently held. An
-  older or equal-version snapshot is silently rejected — this is what will
-  let a future poller apply out-of-order responses safely.
+  older or equal-version snapshot is silently rejected, whether it arrives
+  via a full fetch or as one `ConfigEvent` in a sequence.
+- **A gap is a gap, however it happened.** `ApplyEvent` doesn't distinguish
+  "missed one update" from "brand new client" — both fail the same
+  sequential check and get the same fix: fetch a full snapshot and install
+  it. One recovery path instead of special-casing every way sync can fall
+  behind.
 - **IDs are server-generated**, using a small `crypto/rand`-based generator
   rather than a UUID dependency, since nothing beyond uniqueness and an
   opaque string was needed.
@@ -171,17 +194,19 @@ go vet ./...
 
 Tests cover: domain invariants (duplicate keys, version increments),
 concurrency safety of the in-memory repositories, the full HTTP
-create/get/list/update flow and its error responses, and the SDK's
+create/get/list/update flow and its error responses, the SDK's
 evaluation/fallback/versioning/concurrency behavior (including snapshot
-replacement racing against concurrent reads).
+replacement racing against concurrent reads), and the sync protocol
+(sequential apply, stale/duplicate/gap handling, and gap recovery against
+a real running server, not just a mock).
 
 ## Roadmap
 
 Roughly in order:
 
-- [ ] SDK configuration sync (server → SDK) via polling
+- [x] Versioned sync protocol foundation (`ApplyEvent`, gap detection, snapshot recovery)
+- [ ] SSE transport to actually deliver `ConfigEvent`s to running SDKs
 - [ ] PostgreSQL persistence for the control plane
-- [ ] Push-based updates (SSE) as an alternative to polling
 - [ ] Targeting rules (evaluate against request attributes like country/plan)
 - [ ] Deterministic percentage rollouts
 - [ ] Audit history and rollback
@@ -200,6 +225,8 @@ internal/memory/    in-memory repositories
 internal/app/       use cases / services
 internal/httpapi/   HTTP handlers, routing, JSON (de)serialization
 internal/idgen/     ID generation
-client.go           SDK: Client, Bool()
+client.go           SDK: Client, Bool(), ApplyEvent()
 snapshot.go         SDK: Snapshot, Flag
+event.go            SDK: ConfigEvent, the sync protocol's wire event
+fetch.go            SDK: FetchSnapshot — bootstrap + gap recovery
 ```
