@@ -118,3 +118,23 @@ func toConfigurationResponse(env domain.Environment, version int, flags []domain
 	}
 	return resp
 }
+
+// configEventPayload is the JSON shape of one SSE configuration.updated
+// event's data field, matching docs/api.md §6.
+type configEventPayload struct {
+	Environment string `json:"environment"`
+	Version     int    `json:"version"`
+	Type        string `json:"type"`
+	FlagKey     string `json:"flag_key"`
+	Enabled     bool   `json:"enabled"`
+}
+
+func toConfigEventPayload(environmentKey string, e domain.ConfigEvent) configEventPayload {
+	return configEventPayload{
+		Environment: environmentKey,
+		Version:     e.Version,
+		Type:        string(e.Type),
+		FlagKey:     e.FlagKey,
+		Enabled:     e.Enabled,
+	}
+}

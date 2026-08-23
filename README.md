@@ -9,9 +9,9 @@ change application behavior at runtime — enabling a feature, rolling it back,
 ramping it out gradually — without redeploying.
 
 > **Status:** actively in development. The control plane (projects,
-> environments, boolean flags), a local-evaluation Go SDK, and the
-> foundation of a versioned config-sync protocol are working end-to-end.
-> See [Roadmap](#roadmap) for what's next.
+> environments, boolean flags), a local-evaluation Go SDK, and a versioned
+> config-sync protocol — including a live SSE push transport — are working
+> end-to-end on the server side. See [Roadmap](#roadmap) for what's next.
 
 ## Why
 
@@ -50,11 +50,14 @@ repository:
 - `GET .../configuration` — an environment's full current config plus a
   configuration version (its own counter, independent of any single flag's
   version) — the sync protocol's authoritative recovery endpoint, below
+- `GET .../stream` — a live Server-Sent Events feed of that environment's
+  configuration changes, with resume-after-disconnect via `Last-Event-ID`
+  and no gap or duplicate at the replay→live handoff
 - Consistent JSON error responses (`404` for missing resources, `409` for
   key conflicts, `400` for validation failures)
 
 **Go SDK** (root package, `flagship`) — local, concurrency-safe boolean flag
-evaluation, plus the foundation of a versioned sync protocol:
+evaluation, plus the client-side half of the versioned sync protocol:
 
 - `client.Bool(key, default)` never makes a network call and never returns a
   zero value in place of your fallback
@@ -67,8 +70,9 @@ evaluation, plus the foundation of a versioned sync protocol:
 - `FetchSnapshot` — the one recovery mechanism for every kind of gap: fetch
   the authoritative configuration and install it wholesale
 
-**What's intentionally not built yet:** the actual transport that delivers
-`ConfigEvent`s (SSE), persistence (PostgreSQL), targeting rules, percentage
+**What's intentionally not built yet:** the SDK's side of the SSE transport
+(connect to `/stream`, feed events to `ApplyEvent`, reconnect with backoff
+on failure), persistence (PostgreSQL), targeting rules, percentage
 rollouts, authentication, audit history, a dashboard. See
 [Roadmap](#roadmap).
 
@@ -101,10 +105,18 @@ curl -s -X PATCH localhost:8080/api/v1/flags/<flagID> \
 
 curl -s localhost:8080/api/v1/environments/<environmentID>/configuration
 # {"version":2,"environment":"production","flags":[{"key":"new-checkout","enabled":true}]}
+
+curl -s -N localhost:8080/api/v1/environments/<environmentID>/stream
+# id: 1
+# event: configuration.updated
+# data: {"environment":"production","version":1,"type":"flag_created","flag_key":"new-checkout","enabled":false}
+#
+# (stays open; further flag changes appear here live, in real time)
 ```
 
-Use the SDK from a Go application. There's no live transport yet (see
-Roadmap), but `FetchSnapshot` already talks to the endpoint above:
+There's no SDK client for `/stream` yet (see Roadmap) — the server side
+above is what a future SDK sync loop will connect to. Today, `FetchSnapshot`
+talks to the configuration endpoint for a one-shot fetch:
 
 ```go
 snapshot, _ := flagship.FetchSnapshot(ctx, nil, "http://localhost:8080", environmentID)
@@ -181,6 +193,12 @@ later) is a separate concern the SDK doesn't need to know about.
   sequential check and get the same fix: fetch a full snapshot and install
   it. One recovery path instead of special-casing every way sync can fall
   behind.
+- **Replay and going live are one atomic operation, not two.** A naive
+  "read history, then subscribe" has a race: something can be recorded in
+  between and land in neither. The server instead registers a live
+  subscriber and reads replay history under the same lock recording an
+  event uses, so there's no window for a gap or a duplicate at that
+  handoff — by construction, not by careful timing.
 - **IDs are server-generated**, using a small `crypto/rand`-based generator
   rather than a UUID dependency, since nothing beyond uniqueness and an
   opaque string was needed.
@@ -195,18 +213,22 @@ go vet ./...
 
 Tests cover: domain invariants (duplicate keys, version increments),
 concurrency safety of the in-memory repositories, the full HTTP
-create/get/list/update flow and its error responses, the SDK's
+create/get/list/update/delete flow and its error responses, the SDK's
 evaluation/fallback/versioning/concurrency behavior (including snapshot
-replacement racing against concurrent reads), and the sync protocol
+replacement racing against concurrent reads), the sync protocol
 (sequential apply, stale/duplicate/gap handling, and gap recovery against
-a real running server, not just a mock).
+a real running server, not just a mock), and the SSE transport (replay,
+live delivery, the replay→live handoff proven gap/duplicate-free with a
+deterministic concurrency test, slow-consumer non-blocking behavior, and
+an end-to-end run against a real streamed HTTP connection).
 
 ## Roadmap
 
 Roughly in order:
 
 - [x] Versioned sync protocol foundation (`ApplyEvent`, gap detection, snapshot recovery)
-- [ ] SSE transport to actually deliver `ConfigEvent`s to running SDKs
+- [x] Server-side SSE transport (`/stream`, event log, replay-on-reconnect)
+- [ ] SDK-side SSE client (connect, apply events, reconnect with backoff)
 - [ ] PostgreSQL persistence for the control plane
 - [ ] Targeting rules (evaluate against request attributes like country/plan)
 - [ ] Deterministic percentage rollouts

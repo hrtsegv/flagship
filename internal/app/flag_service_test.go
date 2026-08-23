@@ -233,7 +233,7 @@ func TestFlagService_Delete_NotFound(t *testing.T) {
 	}
 }
 
-func TestFlagService_EventsSince(t *testing.T) {
+func TestFlagService_Stream(t *testing.T) {
 	ctx := context.Background()
 	projects := memory.NewProjectRepository()
 	environments := memory.NewEnvironmentRepository()
@@ -244,23 +244,31 @@ func TestFlagService_EventsSince(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, replayable, err := svc.EventsSince(ctx, env.ID, 0)
+	sub, err := svc.Stream(ctx, env.ID, 0)
 	if err != nil {
-		t.Fatalf("EventsSince() unexpected error: %v", err)
+		t.Fatalf("Stream() unexpected error: %v", err)
 	}
-	if !replayable {
-		t.Fatal("replayable = false, want true")
+	defer sub.Unsubscribe()
+
+	if sub.Environment.Key != "production" {
+		t.Errorf("Environment.Key = %q, want %q", sub.Environment.Key, "production")
 	}
-	if len(events) != 1 || events[0].Type != domain.ConfigEventFlagCreated || events[0].FlagKey != "new-checkout" {
-		t.Fatalf("events = %+v, want a single flag_created event for new-checkout", events)
+	if !sub.Replayable {
+		t.Fatal("Replayable = false, want true")
+	}
+	if len(sub.Events) != 1 || sub.Events[0].Type != domain.ConfigEventFlagCreated || sub.Events[0].FlagKey != "new-checkout" {
+		t.Fatalf("Events = %+v, want a single flag_created event for new-checkout", sub.Events)
+	}
+	if sub.Live == nil {
+		t.Error("Live channel is nil, want a usable subscription")
 	}
 }
 
-func TestFlagService_EventsSince_EnvironmentNotFound(t *testing.T) {
+func TestFlagService_Stream_EnvironmentNotFound(t *testing.T) {
 	svc := NewFlagService(memory.NewFlagRepository(), memory.NewEnvironmentRepository())
-	_, _, err := svc.EventsSince(context.Background(), "missing", 0)
+	_, err := svc.Stream(context.Background(), "missing", 0)
 	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("EventsSince() error = %v, want ErrNotFound", err)
+		t.Fatalf("Stream() error = %v, want ErrNotFound", err)
 	}
 }
 

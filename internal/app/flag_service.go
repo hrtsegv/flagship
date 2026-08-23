@@ -98,15 +98,39 @@ func (s *FlagService) Delete(ctx context.Context, flagID string) error {
 	return s.flags.Delete(ctx, flagID)
 }
 
-// EventsSince verifies environmentID exists and returns the events a
-// client resuming from sinceVersion missed, along with whether replaying
-// them is sufficient to bring that client up to date. When it isn't, the
-// caller must fall back to Snapshot.
-func (s *FlagService) EventsSince(ctx context.Context, environmentID string, sinceVersion int) ([]domain.ConfigEvent, bool, error) {
-	if _, err := s.environments.GetByID(ctx, environmentID); err != nil {
-		return nil, false, err
+// StreamSubscription is what FlagService.Stream returns: the events
+// needed to catch a caller up to the moment of subscription (if
+// Replayable), and a live feed of further events from that same moment
+// onward. The caller must call Unsubscribe when done (typically via
+// defer).
+type StreamSubscription struct {
+	Environment domain.Environment
+	Events      []domain.ConfigEvent
+	Replayable  bool
+	Live        <-chan domain.ConfigEvent
+	Unsubscribe func()
+}
+
+// Stream verifies environmentID exists and atomically subscribes to its
+// live configuration event feed, alongside the events since sinceVersion
+// needed to catch the caller up to the moment of subscription. When
+// Replayable is false, the caller has fallen too far behind (or asked for
+// a version the server never had) and must recover via Snapshot instead
+// of trusting the (empty) event list.
+func (s *FlagService) Stream(ctx context.Context, environmentID string, sinceVersion int) (StreamSubscription, error) {
+	env, err := s.environments.GetByID(ctx, environmentID)
+	if err != nil {
+		return StreamSubscription{}, err
 	}
-	return s.flags.EventsSince(ctx, environmentID, sinceVersion)
+
+	events, replayable, live, unsubscribe := s.flags.SubscribeFrom(ctx, environmentID, sinceVersion)
+	return StreamSubscription{
+		Environment: env,
+		Events:      events,
+		Replayable:  replayable,
+		Live:        live,
+		Unsubscribe: unsubscribe,
+	}, nil
 }
 
 // Snapshot verifies environmentID exists and returns its current

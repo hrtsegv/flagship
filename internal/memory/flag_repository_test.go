@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/hrtsegv/flagship/internal/domain"
 )
@@ -242,7 +243,18 @@ func TestFlagRepository_Delete_IncrementsConfigVersionAndScopesSnapshot(t *testi
 	}
 }
 
-func TestFlagRepository_EventsSince_RecordsEachMutation(t *testing.T) {
+// subscribeOnly is a small helper for tests that only care about the
+// replay half of SubscribeFrom's return. The live channel is discarded:
+// these tests are single-goroutine and synchronous, so nothing is ever
+// published to it before t.Cleanup unsubscribes.
+func subscribeOnly(t *testing.T, repo *FlagRepository, environmentID string, sinceVersion int) ([]domain.ConfigEvent, bool) {
+	t.Helper()
+	events, replayable, _, unsubscribe := repo.SubscribeFrom(context.Background(), environmentID, sinceVersion)
+	t.Cleanup(unsubscribe)
+	return events, replayable
+}
+
+func TestFlagRepository_SubscribeFrom_RecordsEachMutation(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFlagRepository()
 
@@ -257,10 +269,7 @@ func TestFlagRepository_EventsSince_RecordsEachMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, replayable, err := repo.EventsSince(ctx, "e1", 0)
-	if err != nil {
-		t.Fatalf("EventsSince() unexpected error: %v", err)
-	}
+	events, replayable := subscribeOnly(t, repo, "e1", 0)
 	if !replayable {
 		t.Fatal("replayable = false, want true when the full history is retained")
 	}
@@ -280,7 +289,7 @@ func TestFlagRepository_EventsSince_RecordsEachMutation(t *testing.T) {
 	}
 }
 
-func TestFlagRepository_EventsSince_ReturnsOnlyNewerEvents(t *testing.T) {
+func TestFlagRepository_SubscribeFrom_ReturnsOnlyNewerEvents(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFlagRepository()
 
@@ -294,10 +303,7 @@ func TestFlagRepository_EventsSince_ReturnsOnlyNewerEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, replayable, err := repo.EventsSince(ctx, "e1", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	events, replayable := subscribeOnly(t, repo, "e1", 1)
 	if !replayable {
 		t.Fatal("replayable = false, want true")
 	}
@@ -306,7 +312,7 @@ func TestFlagRepository_EventsSince_ReturnsOnlyNewerEvents(t *testing.T) {
 	}
 }
 
-func TestFlagRepository_EventsSince_AlreadyCurrent(t *testing.T) {
+func TestFlagRepository_SubscribeFrom_AlreadyCurrent(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFlagRepository()
 
@@ -314,10 +320,7 @@ func TestFlagRepository_EventsSince_AlreadyCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, replayable, err := repo.EventsSince(ctx, "e1", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	events, replayable := subscribeOnly(t, repo, "e1", 1)
 	if !replayable {
 		t.Fatal("replayable = false, want true for a client that is already current")
 	}
@@ -326,13 +329,10 @@ func TestFlagRepository_EventsSince_AlreadyCurrent(t *testing.T) {
 	}
 }
 
-func TestFlagRepository_EventsSince_FreshEnvironment(t *testing.T) {
+func TestFlagRepository_SubscribeFrom_FreshEnvironment(t *testing.T) {
 	repo := NewFlagRepository()
 
-	events, replayable, err := repo.EventsSince(context.Background(), "e1", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	events, replayable := subscribeOnly(t, repo, "e1", 0)
 	if !replayable {
 		t.Fatal("replayable = false, want true for a fresh environment at version 0")
 	}
@@ -341,7 +341,7 @@ func TestFlagRepository_EventsSince_FreshEnvironment(t *testing.T) {
 	}
 }
 
-func TestFlagRepository_EventsSince_AheadOfServerIsNotReplayable(t *testing.T) {
+func TestFlagRepository_SubscribeFrom_AheadOfServerIsNotReplayable(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFlagRepository()
 
@@ -349,16 +349,13 @@ func TestFlagRepository_EventsSince_AheadOfServerIsNotReplayable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, replayable, err := repo.EventsSince(ctx, "e1", 5)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, replayable := subscribeOnly(t, repo, "e1", 5)
 	if replayable {
 		t.Fatal("replayable = true, want false when the client claims a version ahead of the server")
 	}
 }
 
-func TestFlagRepository_EventsSince_TrimmedHistoryIsNotReplayable(t *testing.T) {
+func TestFlagRepository_SubscribeFrom_TrimmedHistoryIsNotReplayable(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFlagRepository()
 
@@ -375,17 +372,12 @@ func TestFlagRepository_EventsSince_TrimmedHistoryIsNotReplayable(t *testing.T) 
 	}
 
 	// A client at version 0 needs version 1, which is gone.
-	if _, replayable, err := repo.EventsSince(ctx, "e1", 0); err != nil {
-		t.Fatal(err)
-	} else if replayable {
+	if _, replayable := subscribeOnly(t, repo, "e1", 0); replayable {
 		t.Error("replayable = true for a client needing trimmed events, want false")
 	}
 
 	// A client at version 1 needs version 2 onward, which is still retained.
-	events, replayable, err := repo.EventsSince(ctx, "e1", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	events, replayable := subscribeOnly(t, repo, "e1", 1)
 	if !replayable {
 		t.Fatal("replayable = false at the retention boundary, want true")
 	}
@@ -395,7 +387,7 @@ func TestFlagRepository_EventsSince_TrimmedHistoryIsNotReplayable(t *testing.T) 
 	}
 }
 
-func TestFlagRepository_EventsSince_ScopedToEnvironment(t *testing.T) {
+func TestFlagRepository_SubscribeFrom_ScopedToEnvironment(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFlagRepository()
 
@@ -406,16 +398,13 @@ func TestFlagRepository_EventsSince_ScopedToEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err := repo.EventsSince(ctx, "e1", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	events, _ := subscribeOnly(t, repo, "e1", 0)
 	if len(events) != 1 || events[0].FlagKey != "a" {
 		t.Fatalf("e1 events = %+v, want only the flag %q event", events, "a")
 	}
 }
 
-func TestFlagRepository_EventsSince_ReturnsIndependentSlice(t *testing.T) {
+func TestFlagRepository_SubscribeFrom_ReturnsIndependentSlice(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFlagRepository()
 
@@ -423,19 +412,212 @@ func TestFlagRepository_EventsSince_ReturnsIndependentSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err := repo.EventsSince(ctx, "e1", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	events, _ := subscribeOnly(t, repo, "e1", 0)
 	events[0].FlagKey = "mutated-by-caller"
 
-	again, _, err := repo.EventsSince(ctx, "e1", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	again, _ := subscribeOnly(t, repo, "e1", 0)
 	if again[0].FlagKey != "a" {
 		t.Errorf("stored event was mutated through the returned slice: FlagKey = %q", again[0].FlagKey)
 	}
+}
+
+func TestFlagRepository_SubscribeFrom_DeliversLiveEvents(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, live, unsubscribe := repo.SubscribeFrom(ctx, "e1", 1)
+	defer unsubscribe()
+
+	enabled := true
+	if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case e := <-live:
+		want := domain.ConfigEvent{EnvironmentID: "e1", Version: 2, Type: domain.ConfigEventFlagUpdated, FlagKey: "a", Enabled: true}
+		if e != want {
+			t.Errorf("live event = %+v, want %+v", e, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the live event")
+	}
+}
+
+func TestFlagRepository_SubscribeFrom_UnsubscribeStopsDelivery(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, live, unsubscribe := repo.SubscribeFrom(ctx, "e1", 1)
+	unsubscribe()
+
+	enabled := true
+	if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case e, ok := <-live:
+		if ok {
+			t.Fatalf("received %+v after unsubscribe, want nothing", e)
+		}
+	case <-time.After(50 * time.Millisecond):
+		// No delivery within a short window is exactly what we want: the
+		// channel isn't closed (unsubscribe only stops future publishes,
+		// it doesn't close the channel), so a nil receive would block
+		// forever if delivery incorrectly happened after removal.
+	}
+}
+
+func TestFlagRepository_SubscribeFrom_SlowConsumerDoesNotBlockWriter(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, _, unsubscribe := repo.SubscribeFrom(ctx, "e1", 0)
+	defer unsubscribe()
+
+	// Fill the subscriber's buffer without ever draining it, then confirm
+	// one more write completes promptly instead of hanging.
+	enabled := false
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < subscriberBufferSize+5; i++ {
+			enabled = !enabled
+			if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+				t.Errorf("Update() unexpected error: %v", err)
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("writes blocked on a slow subscriber instead of dropping events")
+	}
+}
+
+// TestFlagRepository_SubscribeFrom_ReplayLiveHandoffHasNoGapOrDuplicate is
+// the core correctness proof for SubscribeFrom: a write that happens
+// after subscription must never be missing from the live feed, and must
+// never also appear in the replayed history. The synchronization channel
+// pins the write to happen strictly after SubscribeFrom returns, so this
+// is deterministic rather than relying on timing.
+func TestFlagRepository_SubscribeFrom_ReplayLiveHandoffHasNoGapOrDuplicate(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err) // version 1
+	}
+
+	proceed := make(chan struct{})
+	writeDone := make(chan error, 1)
+	go func() {
+		<-proceed
+		enabled := true
+		_, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}) // version 2
+		writeDone <- err
+	}()
+
+	events, replayable, live, unsubscribe := repo.SubscribeFrom(ctx, "e1", 0)
+	defer unsubscribe()
+	if !replayable {
+		t.Fatal("replayable = false, want true")
+	}
+	if len(events) != 1 || events[0].Version != 1 {
+		t.Fatalf("history at subscribe time = %+v, want exactly version 1", events)
+	}
+
+	close(proceed)
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case e := <-live:
+		if e.Version != 2 {
+			t.Fatalf("live event version = %d, want 2 (no gap, no duplicate of version 1)", e.Version)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for version 2 on the live channel")
+	}
+}
+
+func TestFlagRepository_SubscribeFrom_ConcurrentWritesNeverDuplicate(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, live, unsubscribe := repo.SubscribeFrom(ctx, "e1", 0)
+	defer unsubscribe()
+
+	seen := make(map[int]bool)
+	for _, e := range events {
+		seen[e.Version] = true
+	}
+
+	const writers, updatesPerWriter = 4, 20
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			enabled := false
+			for i := 0; i < updatesPerWriter; i++ {
+				enabled = !enabled
+				if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+					t.Errorf("Update() unexpected error: %v", err)
+				}
+			}
+		}()
+	}
+
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		// Writers publish synchronously inside Update, so by the time
+		// wg.Wait() (below) returns, everything that will ever be sent
+		// has already been sent; this only needs to wait long enough to
+		// read whatever's sitting in the channel buffer, not for more
+		// writers to show up.
+		for {
+			select {
+			case e, ok := <-live:
+				if !ok {
+					return
+				}
+				if seen[e.Version] {
+					t.Errorf("version %d delivered more than once (via history+live combined)", e.Version)
+				}
+				seen[e.Version] = true
+			case <-time.After(200 * time.Millisecond):
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	<-drained
+	// No assertion on len(seen): a slow-consumer buffer can legitimately
+	// drop some live events under this much concurrency. What must never
+	// happen, and what every earlier assertion in this test verified, is
+	// a duplicate delivery of any single version.
 }
 
 func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {

@@ -24,6 +24,7 @@ func NewServer(projects *app.ProjectService, environments *app.EnvironmentServic
 	mux.HandleFunc("POST /api/v1/environments/{environmentID}/flags", fh.create)
 	mux.HandleFunc("GET /api/v1/environments/{environmentID}/flags", fh.list)
 	mux.HandleFunc("GET /api/v1/environments/{environmentID}/configuration", fh.configuration)
+	mux.HandleFunc("GET /api/v1/environments/{environmentID}/stream", fh.stream)
 
 	mux.HandleFunc("GET /api/v1/flags/{flagID}", fh.get)
 	mux.HandleFunc("PATCH /api/v1/flags/{flagID}", fh.update)

@@ -13,18 +13,28 @@ import (
 // maxRetainedEventsPerEnvironment caps each environment's event history.
 // Once it's exceeded the oldest events are dropped, and a client that has
 // fallen further behind than this can no longer be brought up to date by
-// replay — EventsSince reports that, and the client recovers from a full
+// replay — SubscribeFrom reports that, and the client recovers from a full
 // snapshot instead. Retaining everything forever would be the only
 // alternative, which an in-memory store can't promise.
 const maxRetainedEventsPerEnvironment = 1000
+
+// subscriberBufferSize bounds how far a live subscriber can lag before its
+// events start being dropped. Publishing happens under the same lock that
+// serializes every flag mutation, so it must never block — a full buffer
+// means the event is dropped for that subscriber rather than stalling
+// every other write in the system. A dropped live event isn't a
+// correctness problem: the SDK's version check treats it as an ordinary
+// gap and recovers via a snapshot, the same as any other gap.
+const subscriberBufferSize = 16
 
 // FlagRepository is an in-memory store of flags, safe for concurrent use.
 type FlagRepository struct {
 	mu             sync.RWMutex
 	byID           map[string]domain.Flag
-	keys           map[string]struct{}             // "environmentID\x00key" -> exists
-	configVersions map[string]int                  // environmentID -> configuration version
-	events         map[string][]domain.ConfigEvent // environmentID -> ordered event history
+	keys           map[string]struct{}                             // "environmentID\x00key" -> exists
+	configVersions map[string]int                                  // environmentID -> configuration version
+	events         map[string][]domain.ConfigEvent                 // environmentID -> ordered event history
+	subscribers    map[string]map[chan domain.ConfigEvent]struct{} // environmentID -> live subscribers
 }
 
 // NewFlagRepository returns an empty FlagRepository.
@@ -34,6 +44,7 @@ func NewFlagRepository() *FlagRepository {
 		keys:           make(map[string]struct{}),
 		configVersions: make(map[string]int),
 		events:         make(map[string][]domain.ConfigEvent),
+		subscribers:    make(map[string]map[chan domain.ConfigEvent]struct{}),
 	}
 }
 
@@ -41,26 +52,38 @@ func flagKeyIndex(environmentID, key string) string {
 	return environmentID + "\x00" + key
 }
 
-// recordEvent increments environmentID's configuration version and appends
-// the matching event, trimming the oldest history past the retention cap.
-// The caller must hold r.mu for writing: bumping the version and recording
-// what changed at that version are deliberately one indivisible step, so
-// no observer can ever see a version whose event is missing (or vice
-// versa).
+// recordEvent increments environmentID's configuration version, appends
+// the matching event (trimming the oldest history past the retention
+// cap), and publishes it to any live subscribers. The caller must hold
+// r.mu for writing: bumping the version, recording what changed at that
+// version, and notifying subscribers are deliberately one indivisible
+// step, so no observer can ever see a version whose event is missing (or
+// vice versa), and a subscriber can never miss an event that was recorded
+// while it was already listening.
 func (r *FlagRepository) recordEvent(environmentID string, eventType domain.ConfigEventType, flagKey string, enabled bool) {
 	r.configVersions[environmentID]++
 
-	events := append(r.events[environmentID], domain.ConfigEvent{
+	event := domain.ConfigEvent{
 		EnvironmentID: environmentID,
 		Version:       r.configVersions[environmentID],
 		Type:          eventType,
 		FlagKey:       flagKey,
 		Enabled:       enabled,
-	})
+	}
+
+	events := append(r.events[environmentID], event)
 	if len(events) > maxRetainedEventsPerEnvironment {
 		events = events[len(events)-maxRetainedEventsPerEnvironment:]
 	}
 	r.events[environmentID] = events
+
+	for ch := range r.subscribers[environmentID] {
+		select {
+		case ch <- event:
+		default:
+			// Slow consumer: drop rather than block every other writer.
+		}
+	}
 }
 
 // Create stores flag, rejecting it with domain.ErrDuplicateKey if a flag
@@ -151,30 +174,27 @@ func (r *FlagRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// EventsSince returns environmentID's events after sinceVersion, in
-// version order, for a client resuming from that version.
-//
-// replayable reports whether the returned events are sufficient to bring
-// such a client fully up to date. It is false when the events the client
-// missed have already been trimmed from the retained history, or when
-// sinceVersion is ahead of what this repository has — in both cases the
-// caller cannot safely resume and must fall back to a full snapshot. A
+// eventsSinceLocked returns environmentID's events after sinceVersion, in
+// version order, and whether they're sufficient to bring a client resuming
+// from that version fully up to date. It's false when the events the
+// client missed have already been trimmed from the retained history, or
+// when sinceVersion is ahead of what this repository has — in both cases
+// the caller cannot safely resume and must fall back to a full snapshot. A
 // client that is already current is replayable with no events.
-func (r *FlagRepository) EventsSince(ctx context.Context, environmentID string, sinceVersion int) (events []domain.ConfigEvent, replayable bool, err error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+//
+// The caller must hold r.mu (for reading or writing).
+func (r *FlagRepository) eventsSinceLocked(environmentID string, sinceVersion int) (events []domain.ConfigEvent, replayable bool) {
 	current := r.configVersions[environmentID]
 	if sinceVersion > current {
-		return nil, false, nil
+		return nil, false
 	}
 	if sinceVersion == current {
-		return nil, true, nil
+		return nil, true
 	}
 
 	retained := r.events[environmentID]
 	if len(retained) == 0 || retained[0].Version > sinceVersion+1 {
-		return nil, false, nil
+		return nil, false
 	}
 
 	out := make([]domain.ConfigEvent, 0, current-sinceVersion)
@@ -183,7 +203,38 @@ func (r *FlagRepository) EventsSince(ctx context.Context, environmentID string, 
 			out = append(out, e)
 		}
 	}
-	return out, true, nil
+	return out, true
+}
+
+// SubscribeFrom atomically subscribes to environmentID's live event feed
+// and returns the events since sinceVersion as of the moment of
+// subscription (see eventsSinceLocked). Doing both under one lock means
+// the returned history and the first event the live channel can ever
+// deliver are contiguous: no event is ever duplicated between them, and
+// none in between is ever missed, regardless of how a concurrent writer's
+// goroutine happens to be scheduled.
+//
+// The caller must call unsubscribe when done to stop leaking the
+// subscription (typically via defer); it's safe to call more than once.
+func (r *FlagRepository) SubscribeFrom(ctx context.Context, environmentID string, sinceVersion int) (events []domain.ConfigEvent, replayable bool, live <-chan domain.ConfigEvent, unsubscribe func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	events, replayable = r.eventsSinceLocked(environmentID, sinceVersion)
+
+	ch := make(chan domain.ConfigEvent, subscriberBufferSize)
+	if r.subscribers[environmentID] == nil {
+		r.subscribers[environmentID] = make(map[chan domain.ConfigEvent]struct{})
+	}
+	r.subscribers[environmentID][ch] = struct{}{}
+
+	unsubscribe = func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		delete(r.subscribers[environmentID], ch)
+	}
+
+	return events, replayable, ch, unsubscribe
 }
 
 // Snapshot returns the current configuration version for environmentID

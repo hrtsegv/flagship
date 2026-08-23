@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/hrtsegv/flagship/internal/app"
@@ -398,3 +401,169 @@ func TestConfiguration_EnvironmentNotFoundReturns404(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// readSSEFrame reads one Server-Sent Events frame (id/event/data lines
+// terminated by a blank line) and decodes its data as a configEventPayload.
+// Tests using this rely on streamHeartbeatInterval being much longer than
+// any test run, so a heartbeat comment never interleaves with a real frame.
+func readSSEFrame(t *testing.T, r *bufio.Reader) (id int, event string, payload configEventPayload) {
+	t.Helper()
+
+	var data string
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading SSE frame: %v", err)
+		}
+		line = strings.TrimRight(line, "\n")
+
+		switch {
+		case line == "":
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				t.Fatalf("decoding SSE data %q: %v", data, err)
+			}
+			return id, event, payload
+		case strings.HasPrefix(line, "id: "):
+			parsed, err := strconv.Atoi(strings.TrimPrefix(line, "id: "))
+			if err != nil {
+				t.Fatalf("parsing SSE id: %v", err)
+			}
+			id = parsed
+		case strings.HasPrefix(line, "event: "):
+			event = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data: "):
+			data = strings.TrimPrefix(line, "data: ")
+		}
+	}
+}
+
+func TestStream_EnvironmentNotFoundReturns404(t *testing.T) {
+	h := newTestServer()
+
+	rec := doRequest(t, h, http.MethodGet, "/api/v1/environments/missing/stream", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStream_InvalidLastEventIDReturns400BeforeEnvironmentCheck(t *testing.T) {
+	h := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/environments/missing/stream", nil)
+	req.Header.Set("Last-Event-ID", "not-a-number")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (before the 404 an unknown environment would otherwise cause), body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStream_NegativeLastEventIDReturns400(t *testing.T) {
+	h := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/environments/missing/stream", nil)
+	req.Header.Set("Last-Event-ID", "-1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestStream_ReplaysThenDeliversLiveWithoutDuplicating drives the full
+// protocol end-to-end over a real connection: a client resumes from a
+// version it has already applied, is replayed exactly what it missed,
+// and then receives a further live update with nothing repeated or
+// skipped at the handoff. Direct handler calls via httptest.ResponseRecorder
+// can't exercise this (the handler's live loop never returns until the
+// request context is canceled, which a synchronous ServeHTTP call never
+// does), so this uses a real httptest.Server and a real HTTP client.
+func TestStream_ReplaysThenDeliversLiveWithoutDuplicating(t *testing.T) {
+	h := newTestServer()
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	flag := createFlag(t, h, env.ID) // v1: enabled=false
+
+	doRequest(t, h, http.MethodPatch, "/api/v1/flags/"+flag.ID, updateFlagRequest{Enabled: boolPtr(true)})  // v2
+	doRequest(t, h, http.MethodPatch, "/api/v1/flags/"+flag.ID, updateFlagRequest{Enabled: boolPtr(false)}) // v3
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/environments/"+env.ID+"/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Last-Event-ID", "1")
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want %q", ct, "text/event-stream")
+	}
+
+	reader := bufio.NewReader(resp.Body)
+
+	id, event, p2 := readSSEFrame(t, reader)
+	if id != 2 || event != "configuration.updated" || p2.Version != 2 || !p2.Enabled {
+		t.Fatalf("first replayed frame = (id=%d, event=%s, payload=%+v), want id=2 enabled=true", id, event, p2)
+	}
+	id, _, p3 := readSSEFrame(t, reader)
+	if id != 3 || p3.Version != 3 || p3.Enabled {
+		t.Fatalf("second replayed frame = (id=%d, payload=%+v), want id=3 enabled=false", id, p3)
+	}
+
+	// A live update (v4) after replay finished must arrive without
+	// repeating v2/v3.
+	doRequest(t, h, http.MethodPatch, "/api/v1/flags/"+flag.ID, updateFlagRequest{Enabled: boolPtr(true)})
+	id, _, p4 := readSSEFrame(t, reader)
+	if id != 4 || p4.Version != 4 || !p4.Enabled || p4.Environment != "production" || p4.FlagKey != "new-checkout" {
+		t.Fatalf("live frame = (id=%d, payload=%+v), want id=4 for production/new-checkout enabled=true", id, p4)
+	}
+}
+
+// TestStream_NotReplayableStillDeliversLiveEvents covers the fallback
+// path: a client that can't be replayed (here, because it claims a
+// version the server never reached) still gets a working live stream
+// rather than an error or a hang. The SDK's own gap detection is what
+// makes this safe -- the server doesn't need to signal anything special.
+func TestStream_NotReplayableStillDeliversLiveEvents(t *testing.T) {
+	h := newTestServer()
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	flag := createFlag(t, h, env.ID) // v1
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/environments/"+env.ID+"/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Last-Event-ID", "99") // ahead of the server: not replayable
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+
+	doRequest(t, h, http.MethodPatch, "/api/v1/flags/"+flag.ID, updateFlagRequest{Enabled: boolPtr(true)}) // v2
+	id, _, p2 := readSSEFrame(t, reader)
+	if id != 2 || !p2.Enabled {
+		t.Fatalf("live frame after non-replayable connect = (id=%d, payload=%+v), want id=2 enabled=true", id, p2)
+	}
+}
