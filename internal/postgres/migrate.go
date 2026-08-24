@@ -23,7 +23,7 @@ func Migrate(dsn string) error {
 	if err != nil {
 		return fmt.Errorf("postgres: open for migration: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	source, err := iofs.New(migrationFiles, "migrations")
 	if err != nil {

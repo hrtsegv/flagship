@@ -109,7 +109,9 @@ func TestSync_AppliesLiveEventsFromRealServer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go flagship.Sync(ctx, client, flagship.SyncConfig{BaseURL: server.URL, EnvironmentID: environmentID})
+	go func() {
+		_ = flagship.Sync(ctx, client, flagship.SyncConfig{BaseURL: server.URL, EnvironmentID: environmentID})
+	}()
 
 	waitForBool(t, client, "new-checkout", true, false) // bootstrapped to the initial (disabled) state
 
@@ -141,7 +143,7 @@ func TestSync_ReconnectsWithBackoffAfterStreamDrop(t *testing.T) {
 		if n == 1 {
 			return // drop immediately, before sending anything
 		}
-		fmt.Fprintf(w, "id: 2\nevent: configuration.updated\ndata: %s\n\n",
+		_, _ = fmt.Fprintf(w, "id: 2\nevent: configuration.updated\ndata: %s\n\n",
 			`{"environment":"production","version":2,"type":"flag_updated","flag_key":"new-checkout","enabled":true}`)
 		flusher.Flush()
 		<-r.Context().Done()
@@ -154,12 +156,14 @@ func TestSync_ReconnectsWithBackoffAfterStreamDrop(t *testing.T) {
 	defer cancel()
 
 	var errCount atomic.Int32
-	go flagship.Sync(ctx, client, flagship.SyncConfig{
-		BaseURL: server.URL, EnvironmentID: "e1",
-		OnError:    func(error) { errCount.Add(1) },
-		MinBackoff: time.Millisecond,
-		MaxBackoff: 5 * time.Millisecond,
-	})
+	go func() {
+		_ = flagship.Sync(ctx, client, flagship.SyncConfig{
+			BaseURL: server.URL, EnvironmentID: "e1",
+			OnError:    func(error) { errCount.Add(1) },
+			MinBackoff: time.Millisecond,
+			MaxBackoff: 5 * time.Millisecond,
+		})
+	}()
 
 	waitForBool(t, client, "new-checkout", false, true)
 
@@ -183,7 +187,7 @@ func TestSync_FatalOnWrongEnvironmentEvent(t *testing.T) {
 		flusher := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "id: 2\nevent: configuration.updated\ndata: %s\n\n",
+		_, _ = fmt.Fprintf(w, "id: 2\nevent: configuration.updated\ndata: %s\n\n",
 			`{"environment":"staging","version":2,"type":"flag_updated","flag_key":"new-checkout","enabled":true}`)
 		flusher.Flush()
 		<-r.Context().Done()
@@ -241,7 +245,7 @@ func TestSync_RecoversFromGapWithoutReconnecting(t *testing.T) {
 
 		<-releaseGapEvent // wait until the test has bumped configVersion
 		// Client bootstraps at v1; jumping straight to v5 here is a gap.
-		fmt.Fprintf(w, "id: 5\nevent: configuration.updated\ndata: %s\n\n",
+		_, _ = fmt.Fprintf(w, "id: 5\nevent: configuration.updated\ndata: %s\n\n",
 			`{"environment":"production","version":5,"type":"flag_updated","flag_key":"new-checkout","enabled":true}`)
 		flusher.Flush()
 		<-r.Context().Done()
@@ -253,7 +257,7 @@ func TestSync_RecoversFromGapWithoutReconnecting(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go flagship.Sync(ctx, client, flagship.SyncConfig{BaseURL: server.URL, EnvironmentID: "e1"})
+	go func() { _ = flagship.Sync(ctx, client, flagship.SyncConfig{BaseURL: server.URL, EnvironmentID: "e1"}) }()
 
 	// Only bump the "authoritative" version (and release the gap event)
 	// once the client has actually bootstrapped at v1, so the recovery

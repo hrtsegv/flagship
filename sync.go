@@ -160,7 +160,7 @@ func connectAndStream(ctx context.Context, client *Client, httpClient *http.Clie
 	if err != nil {
 		return fmt.Errorf("flagship: connecting to stream: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("flagship: connecting to stream: unexpected status %d", resp.StatusCode)

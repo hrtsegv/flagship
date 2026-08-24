@@ -64,7 +64,7 @@ func (r *FlagRepository) Create(ctx context.Context, flag domain.Flag) (domain.F
 	if err != nil {
 		return domain.Flag{}, fmt.Errorf("postgres: begin create flag: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO flags (id, environment_id, key, name, description, enabled, version, created_at, updated_at)
@@ -145,7 +145,7 @@ func (r *FlagRepository) Update(ctx context.Context, id string, patch domain.Fla
 	if err != nil {
 		return domain.Flag{}, fmt.Errorf("postgres: begin update flag: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	f, err := scanFlag(tx.QueryRow(ctx, `
 		SELECT id, environment_id, key, name, description, enabled, version, created_at, updated_at
@@ -199,7 +199,7 @@ func (r *FlagRepository) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("postgres: begin delete flag: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var environmentID, key string
 	err = tx.QueryRow(ctx, `SELECT environment_id, key FROM flags WHERE id = $1`, id).Scan(&environmentID, &key)
@@ -236,7 +236,7 @@ func (r *FlagRepository) Snapshot(ctx context.Context, environmentID string) (ve
 	if err != nil {
 		return 0, nil, fmt.Errorf("postgres: begin snapshot: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := tx.QueryRow(ctx, `SELECT config_version FROM environments WHERE id = $1`, environmentID).Scan(&version); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
