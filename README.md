@@ -82,9 +82,7 @@ evaluation, plus the client-side half of the versioned sync protocol:
 
 **What's intentionally not built yet:** horizontal scaling across multiple
 server instances, observability, authentication, targeting rules, percentage
-rollouts, audit history, a dashboard, and — closing the loop on all of the
-above — a standalone example application that actually runs `Sync`
-end-to-end. See [Roadmap](#roadmap).
+rollouts, audit history, and a dashboard. See [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -137,6 +135,16 @@ go flagship.Sync(ctx, client, flagship.SyncConfig{
 })
 // client.Bool("new-checkout", false) now reflects live changes to the
 // flag, made through the API above, with no restart and no polling.
+```
+
+[`example/`](example/) is a small, runnable version of exactly this: it
+connects, prints a flag's value, and keeps printing it live as you flip it
+through the API — no restart, no polling.
+
+```bash
+go run ./example -environment=<environmentID>
+# in another terminal: curl -X PATCH .../flags/<flagID> -d '{"enabled":true}'
+# the running example prints the new value immediately
 ```
 
 `FetchSnapshot` alone is still there for a one-shot fetch with no live
@@ -268,7 +276,7 @@ Roughly in order:
 - [x] Server-side SSE transport (`/stream`, event log, replay-on-reconnect)
 - [x] SDK-side SSE client (`flagship.Sync` — connect, apply events, reconnect with backoff)
 - [x] PostgreSQL persistence for the control plane
-- [ ] Example application demonstrating the full loop end-to-end
+- [x] Example application demonstrating the full loop end-to-end
 - [ ] Horizontal scaling across multiple server instances
 - [ ] Observability (logging/metrics/tracing, health checks)
 - [ ] Authentication/authorization
@@ -280,6 +288,7 @@ Roughly in order:
 
 ```text
 cmd/flagship/       entrypoint — go run ./cmd/flagship
+example/            runnable demo of the full sync loop — go run ./example
 internal/domain/    entities + invariants
 internal/postgres/  PostgreSQL repositories, schema migrations
 internal/memory/    in-memory repositories (used by the fast test suite)
