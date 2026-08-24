@@ -13,10 +13,10 @@ change application behavior at runtime — enabling a feature, rolling it back,
 ramping it out gradually — without redeploying.
 
 > **Status:** actively in development. The control plane (projects,
-> environments, boolean flags), a local-evaluation Go SDK, and a versioned
-> config-sync protocol with a live SSE push transport are all working
-> end-to-end — server and SDK client both. See [Roadmap](#roadmap) for
-> what's next.
+> environments, boolean flags) is backed by PostgreSQL, a local-evaluation Go
+> SDK and a versioned config-sync protocol with a live SSE push transport are
+> working end-to-end — server and SDK client both. See
+> [Roadmap](#roadmap) for what's next.
 
 ## Why
 
@@ -43,8 +43,9 @@ Control Plane                          Application
 
 ## What's implemented
 
-**Control plane** — an HTTP API backed by a concurrency-safe in-memory
-repository:
+**Control plane** — an HTTP API backed by a PostgreSQL repository (an
+in-memory implementation of the same interfaces also exists and is what the
+fast unit test suite uses, but the server binary requires PostgreSQL):
 
 - Create/list **projects**
 - Create/list **environments** (scoped to a project)
@@ -79,16 +80,19 @@ evaluation, plus the client-side half of the versioned sync protocol:
   connection (no reconnect needed), and reconnects with jittered
   exponential backoff if the connection drops
 
-**What's intentionally not built yet:** persistence (PostgreSQL), targeting
-rules, percentage rollouts, authentication, audit history, a dashboard, and
-— closing the loop on all of the above — a standalone example application
-that actually runs `Sync` end-to-end. See [Roadmap](#roadmap).
+**What's intentionally not built yet:** horizontal scaling across multiple
+server instances, observability, authentication, targeting rules, percentage
+rollouts, audit history, a dashboard, and — closing the loop on all of the
+above — a standalone example application that actually runs `Sync`
+end-to-end. See [Roadmap](#roadmap).
 
 ## Quick start
 
-Run the server:
+The server requires PostgreSQL — point `DATABASE_URL` at one (pending schema
+migrations run automatically on startup):
 
 ```bash
+export DATABASE_URL=postgres://user:pass@localhost:5432/flagship?sslmode=disable
 go run ./cmd/flagship
 ```
 
@@ -165,17 +169,23 @@ The control plane follows a straightforward layered structure:
 
 ```text
 HTTP transport  →  application/use cases  →  domain  →  repository
-(internal/httpapi) (internal/app)            (internal/domain) (internal/memory)
+(internal/httpapi) (internal/app)            (internal/domain) (internal/postgres, internal/memory)
 ```
 
 - **`internal/domain`** — `Project`, `Environment`, `Flag`, and the
   invariants that must hold regardless of transport or storage (unique keys,
   a flag versions up on every update, etc).
-- **`internal/memory`** — a mutex-guarded, in-memory repository per
-  aggregate. Key-uniqueness checks and inserts happen atomically under a
-  single lock.
+- **`internal/postgres`** — the repository implementation the server binary
+  actually runs on: schema migrations, a connection pool, and one repository
+  per aggregate, each mutation and its config-event/version bump committed
+  in a single transaction.
+- **`internal/memory`** — a mutex-guarded, in-memory implementation of the
+  same repository interfaces, kept around because it's what the fast,
+  DB-free unit test suite (and `internal/app`/`internal/httpapi`'s own
+  tests) constructs directly.
 - **`internal/app`** — orchestrates use cases: validates input, checks that
   a parent resource exists before creating a child, assigns server-side IDs.
+  Depends only on the repository interfaces, not on either implementation.
 - **`internal/httpapi`** — decodes/encodes JSON and maps domain errors to
   HTTP status codes. No domain logic lives here.
 
@@ -257,19 +267,22 @@ Roughly in order:
 - [x] Versioned sync protocol foundation (`ApplyEvent`, gap detection, snapshot recovery)
 - [x] Server-side SSE transport (`/stream`, event log, replay-on-reconnect)
 - [x] SDK-side SSE client (`flagship.Sync` — connect, apply events, reconnect with backoff)
+- [x] PostgreSQL persistence for the control plane
 - [ ] Example application demonstrating the full loop end-to-end
-- [ ] PostgreSQL persistence for the control plane
+- [ ] Horizontal scaling across multiple server instances
+- [ ] Observability (logging/metrics/tracing, health checks)
+- [ ] Authentication/authorization
 - [ ] Targeting rules (evaluate against request attributes like country/plan)
 - [ ] Deterministic percentage rollouts
 - [ ] Audit history and rollback
-- [ ] Authentication/authorization
 
 ## Project layout
 
 ```text
 cmd/flagship/       entrypoint — go run ./cmd/flagship
 internal/domain/    entities + invariants
-internal/memory/    in-memory repositories
+internal/postgres/  PostgreSQL repositories, schema migrations
+internal/memory/    in-memory repositories (used by the fast test suite)
 internal/app/       use cases / services
 internal/httpapi/   HTTP handlers, routing, JSON (de)serialization
 internal/idgen/     ID generation
@@ -281,3 +294,6 @@ sse.go              SDK: Server-Sent Events frame parsing
 backoff.go          SDK: jittered exponential backoff for reconnects
 sync.go             SDK: Sync — the SSE client, wired to ApplyEvent
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for a fuller tour of the codebase and
+how to get a local dev environment running.
