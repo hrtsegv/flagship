@@ -388,8 +388,8 @@ func recordMutation(ctx context.Context, tx pgx.Tx, environmentID string, eventT
 
 	_, err = tx.Exec(ctx, `
 		DELETE FROM config_events
-		WHERE environment_id = $1 AND version <= $2 - $3`,
-		environmentID, version, maxRetainedEventsPerEnvironment)
+		WHERE environment_id = $1 AND version <= $2`,
+		environmentID, version-maxRetainedEventsPerEnvironment)
 	if err != nil {
 		return domain.ConfigEvent{}, fmt.Errorf("postgres: trim config events: %w", err)
 	}
