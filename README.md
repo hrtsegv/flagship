@@ -4,6 +4,10 @@
 
 <h1 align="center">Flagship</h1>
 
+<p align="center">
+  <a href="https://github.com/hrtsegv/flagship/actions/workflows/ci.yml"><img src="https://github.com/hrtsegv/flagship/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+</p>
+
 Flagship is a self-hosted feature-flag platform written in Go. It lets a team
 change application behavior at runtime — enabling a feature, rolling it back,
 ramping it out gradually — without redeploying.
@@ -218,6 +222,18 @@ go test ./...
 go test -race ./...   # requires cgo
 go vet ./...
 ```
+
+The PostgreSQL repository tests skip themselves unless `FLAGSHIP_TEST_DATABASE_URL`
+points at a real database:
+
+```bash
+export FLAGSHIP_TEST_DATABASE_URL=postgres://user:pass@localhost:5432/flagship_test?sslmode=disable
+go test ./internal/postgres/...
+```
+
+CI runs `go vet`, `gofmt`, `golangci-lint`, and the full test suite
+(including the PostgreSQL tests, against a real Postgres service container)
+on every push and pull request to `main`.
 
 Tests cover: domain invariants (duplicate keys, version increments),
 concurrency safety of the in-memory repositories, the full HTTP
