@@ -4,9 +4,9 @@
 // polling, and no restart required to observe a change made through the
 // control plane's HTTP API.
 //
-// This is the "First Vertical Slice" from the product requirements:
+// End to end, across three terminals:
 //
-//	Terminal 1: go run ./cmd/flagship
+//	Terminal 1: DATABASE_URL=postgres://... go run ./cmd/flagship
 //	Terminal 2: curl ... create a project, environment, and flag
 //	Terminal 3: go run ./example -environment=<environmentID>
 //	Terminal 2: curl -X PATCH .../flags/{id} -d '{"enabled":true}'
