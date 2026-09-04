@@ -14,7 +14,10 @@ import (
 // `go test ./...` stays fast and DB-free by default.
 const dsnEnvVar = "FLAGSHIP_TEST_DATABASE_URL"
 
-var migrateOnce sync.Once
+var (
+	migrateOnce sync.Once
+	migrateErr  error
+)
 
 // testPool returns a connection pool to the test database, with all tables
 // truncated for isolation, skipping the test if dsnEnvVar isn't set.
@@ -26,11 +29,14 @@ func testPool(t *testing.T) *pgxpool.Pool {
 		t.Skipf("%s not set; skipping PostgreSQL integration test", dsnEnvVar)
 	}
 
-	migrateOnce.Do(func() {
-		if err := Migrate(dsn); err != nil {
-			t.Fatalf("Migrate() unexpected error: %v", err)
-		}
-	})
+	// The schema is migrated once per test binary, but the result is
+	// recorded rather than failing only the test that happened to run
+	// first -- otherwise every later test would run against a schema that
+	// was never created and fail for confusing, unrelated reasons.
+	migrateOnce.Do(func() { migrateErr = Migrate(dsn) })
+	if migrateErr != nil {
+		t.Fatalf("Migrate() unexpected error: %v", migrateErr)
+	}
 
 	pool, err := Connect(context.Background(), dsn)
 	if err != nil {
