@@ -147,10 +147,17 @@ func (r *FlagRepository) Update(ctx context.Context, id string, patch domain.Fla
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// FOR UPDATE because this is a read-modify-write: the row is read here
+	// and written below off the value read. r.mu already serializes writers
+	// within this process, but that's an in-process lock held for the
+	// channel publish -- it can't order writes issued by another process
+	// against the same database, and without the row lock two of those
+	// could both read version N and both write N+1, losing an increment.
 	f, err := scanFlag(tx.QueryRow(ctx, `
 		SELECT id, environment_id, key, name, description, enabled, version, created_at, updated_at
 		FROM flags
-		WHERE id = $1`, id))
+		WHERE id = $1
+		FOR UPDATE`, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Flag{}, fmt.Errorf("%w: flag %q", domain.ErrNotFound, id)
@@ -201,8 +208,13 @@ func (r *FlagRepository) Delete(ctx context.Context, id string) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// FOR UPDATE for the same reason as Update: without it, two concurrent
+	// deletes could both read the row and both proceed, and the second
+	// would record a flag_deleted event (and bump the version) for a flag
+	// that was already gone. With it, the second waits, then sees no row
+	// and reports ErrNotFound.
 	var environmentID, key string
-	err = tx.QueryRow(ctx, `SELECT environment_id, key FROM flags WHERE id = $1`, id).Scan(&environmentID, &key)
+	err = tx.QueryRow(ctx, `SELECT environment_id, key FROM flags WHERE id = $1 FOR UPDATE`, id).Scan(&environmentID, &key)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("%w: flag %q", domain.ErrNotFound, id)
