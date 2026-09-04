@@ -7,24 +7,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/hrtsegv/flagship/internal/domain"
 )
 
 // newFlagRepo returns a FlagRepository backed by a fresh, truncated test
 // database, with environment e1 already seeded so flag inserts satisfy the
-// foreign key.
-func newFlagRepo(t *testing.T) (*FlagRepository, *pgxpool.Pool) {
+// foreign key. Tests needing a second environment call testPool and
+// seedEnvironment directly instead.
+func newFlagRepo(t *testing.T) *FlagRepository {
 	t.Helper()
 	pool := testPool(t)
 	seedEnvironment(t, pool, "e1")
-	return NewFlagRepository(pool), pool
+	return NewFlagRepository(pool)
 }
 
 func TestFlagRepository_Create(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	f := domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout", Version: 1}
 	created, err := repo.Create(ctx, f)
@@ -38,7 +37,7 @@ func TestFlagRepository_Create(t *testing.T) {
 
 func TestFlagRepository_Create_DuplicateKeyWithinEnvironment(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	f1 := domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout"}
 	f2 := domain.Flag{ID: "2", EnvironmentID: "e1", Key: "new-checkout"}
@@ -52,8 +51,44 @@ func TestFlagRepository_Create_DuplicateKeyWithinEnvironment(t *testing.T) {
 	}
 }
 
+func TestFlagRepository_Create_SameKeyDifferentEnvironmentsAllowed(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	seedEnvironment(t, pool, "e1")
+	seedEnvironment(t, pool, "e2")
+	repo := NewFlagRepository(pool)
+
+	f1 := domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout"}
+	f2 := domain.Flag{ID: "2", EnvironmentID: "e2", Key: "new-checkout"}
+
+	if _, err := repo.Create(ctx, f1); err != nil {
+		t.Fatalf("Create() for e1 unexpected error: %v", err)
+	}
+	if _, err := repo.Create(ctx, f2); err != nil {
+		t.Fatalf("Create() for e2 unexpected error: %v", err)
+	}
+}
+
+func TestFlagRepository_GetByID(t *testing.T) {
+	ctx := context.Background()
+	repo := newFlagRepo(t)
+
+	f := domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout", Name: "New Checkout", Enabled: true, Version: 1}
+	if _, err := repo.Create(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.GetByID(ctx, "1")
+	if err != nil {
+		t.Fatalf("GetByID() unexpected error: %v", err)
+	}
+	if got.Key != "new-checkout" || got.Name != "New Checkout" || !got.Enabled || got.Version != 1 {
+		t.Errorf("GetByID() = %+v, want the stored flag's fields round-tripped", got)
+	}
+}
+
 func TestFlagRepository_GetByID_NotFound(t *testing.T) {
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 	_, err := repo.GetByID(context.Background(), "missing")
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("GetByID() error = %v, want ErrNotFound", err)
@@ -88,7 +123,7 @@ func TestFlagRepository_ListByEnvironment(t *testing.T) {
 
 func TestFlagRepository_Update_IncrementsVersion(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	f := domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout", Enabled: false, Version: 1}
 	if _, err := repo.Create(ctx, f); err != nil {
@@ -109,7 +144,7 @@ func TestFlagRepository_Update_IncrementsVersion(t *testing.T) {
 }
 
 func TestFlagRepository_Update_NotFound(t *testing.T) {
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 	_, err := repo.Update(context.Background(), "missing", domain.FlagPatch{})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("Update() error = %v, want ErrNotFound", err)
@@ -118,7 +153,7 @@ func TestFlagRepository_Update_NotFound(t *testing.T) {
 
 func TestFlagRepository_Update_ConcurrentIncrementsAreSerialized(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	f := domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout", Version: 1}
 	if _, err := repo.Create(ctx, f); err != nil {
@@ -150,7 +185,7 @@ func TestFlagRepository_Update_ConcurrentIncrementsAreSerialized(t *testing.T) {
 
 func TestFlagRepository_Delete(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout"}); err != nil {
 		t.Fatal(err)
@@ -164,7 +199,7 @@ func TestFlagRepository_Delete(t *testing.T) {
 }
 
 func TestFlagRepository_Delete_NotFound(t *testing.T) {
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 	err := repo.Delete(context.Background(), "missing")
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("Delete() error = %v, want ErrNotFound", err)
@@ -173,7 +208,7 @@ func TestFlagRepository_Delete_NotFound(t *testing.T) {
 
 func TestFlagRepository_Delete_KeyBecomesReusable(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "new-checkout"}); err != nil {
 		t.Fatal(err)
@@ -188,7 +223,7 @@ func TestFlagRepository_Delete_KeyBecomesReusable(t *testing.T) {
 
 func TestFlagRepository_Delete_IncrementsConfigVersionAndScopesSnapshot(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
 		t.Fatal(err)
@@ -221,7 +256,7 @@ func subscribeOnly(t *testing.T, repo *FlagRepository, environmentID string, sin
 
 func TestFlagRepository_SubscribeFrom_RecordsEachMutation(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a", Enabled: false}); err != nil {
 		t.Fatal(err)
@@ -256,7 +291,7 @@ func TestFlagRepository_SubscribeFrom_RecordsEachMutation(t *testing.T) {
 
 func TestFlagRepository_SubscribeFrom_ReturnsOnlyNewerEvents(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	for _, key := range []string{"a", "b", "c"} {
 		if _, err := repo.Create(ctx, domain.Flag{ID: key, EnvironmentID: "e1", Key: key}); err != nil {
@@ -275,7 +310,7 @@ func TestFlagRepository_SubscribeFrom_ReturnsOnlyNewerEvents(t *testing.T) {
 
 func TestFlagRepository_SubscribeFrom_AlreadyCurrent(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
 		t.Fatal(err)
@@ -291,7 +326,7 @@ func TestFlagRepository_SubscribeFrom_AlreadyCurrent(t *testing.T) {
 }
 
 func TestFlagRepository_SubscribeFrom_FreshEnvironment(t *testing.T) {
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	events, replayable := subscribeOnly(t, repo, "e1", 0)
 	if !replayable {
@@ -304,7 +339,7 @@ func TestFlagRepository_SubscribeFrom_FreshEnvironment(t *testing.T) {
 
 func TestFlagRepository_SubscribeFrom_AheadOfServerIsNotReplayable(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
 		t.Fatal(err)
@@ -318,7 +353,7 @@ func TestFlagRepository_SubscribeFrom_AheadOfServerIsNotReplayable(t *testing.T)
 
 func TestFlagRepository_SubscribeFrom_TrimmedHistoryIsNotReplayable(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
 		t.Fatal(err)
@@ -346,7 +381,7 @@ func TestFlagRepository_SubscribeFrom_TrimmedHistoryIsNotReplayable(t *testing.T
 
 func TestFlagRepository_SubscribeFrom_DeliversLiveEvents(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a", Enabled: false}); err != nil {
 		t.Fatal(err)
@@ -373,7 +408,7 @@ func TestFlagRepository_SubscribeFrom_DeliversLiveEvents(t *testing.T) {
 
 func TestFlagRepository_SubscribeFrom_UnsubscribeStopsDelivery(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
 		t.Fatal(err)
@@ -423,7 +458,7 @@ func TestFlagRepository_SubscribeFrom_ScopedToEnvironment(t *testing.T) {
 // history.
 func TestFlagRepository_SubscribeFrom_ReplayLiveHandoffHasNoGapOrDuplicate(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
 		t.Fatal(err) // version 1
@@ -462,8 +497,108 @@ func TestFlagRepository_SubscribeFrom_ReplayLiveHandoffHasNoGapOrDuplicate(t *te
 	}
 }
 
+func TestFlagRepository_SubscribeFrom_SlowConsumerDoesNotBlockWriter(t *testing.T) {
+	ctx := context.Background()
+	repo := newFlagRepo(t)
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, _, unsubscribe := repo.SubscribeFrom(ctx, "e1", 0)
+	defer unsubscribe()
+
+	// Fill the subscriber's buffer without ever draining it, then confirm
+	// the writes still complete instead of blocking on the full channel.
+	// Publishing happens while the repository's mutex is held, so a
+	// blocking send here would stall every other writer in the process.
+	enabled := false
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < subscriberBufferSize+5; i++ {
+			enabled = !enabled
+			if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+				t.Errorf("Update() unexpected error: %v", err)
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("writes blocked on a slow subscriber instead of dropping events")
+	}
+}
+
+// TestFlagRepository_SubscribeFrom_ConcurrentWritesNeverDuplicate checks the
+// half of the handoff guarantee a single-writer test can't: under
+// concurrent writers, no version may be delivered twice across the replayed
+// history and the live feed combined.
+func TestFlagRepository_SubscribeFrom_ConcurrentWritesNeverDuplicate(t *testing.T) {
+	ctx := context.Background()
+	repo := newFlagRepo(t)
+
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, live, unsubscribe := repo.SubscribeFrom(ctx, "e1", 0)
+	defer unsubscribe()
+
+	seen := make(map[int]bool)
+	for _, e := range events {
+		seen[e.Version] = true
+	}
+
+	const writers, updatesPerWriter = 4, 10
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			enabled := false
+			for i := 0; i < updatesPerWriter; i++ {
+				enabled = !enabled
+				if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+					t.Errorf("Update() unexpected error: %v", err)
+				}
+			}
+		}()
+	}
+
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		// Writers publish synchronously inside Update, so everything that
+		// will ever be sent has been sent by the time the writers finish;
+		// this only needs to outlast the gap between two database-backed
+		// writes, not wait for more writers to appear.
+		for {
+			select {
+			case e, ok := <-live:
+				if !ok {
+					return
+				}
+				if seen[e.Version] {
+					t.Errorf("version %d delivered more than once (via history+live combined)", e.Version)
+				}
+				seen[e.Version] = true
+			case <-time.After(2 * time.Second):
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	<-drained
+	// No assertion on len(seen): a slow-consumer buffer can legitimately
+	// drop live events under concurrency. What must never happen — and what
+	// the loop above checks — is the same version arriving twice.
+}
+
 func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	version, flags, err := repo.Snapshot(context.Background(), "e1")
 	if err != nil {
@@ -479,7 +614,7 @@ func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {
 
 func TestFlagRepository_Snapshot_IncrementsOnCreateAndUpdate(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := newFlagRepo(t)
+	repo := newFlagRepo(t)
 
 	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
 		t.Fatal(err)
@@ -516,5 +651,39 @@ func TestFlagRepository_Snapshot_IncrementsOnCreateAndUpdate(t *testing.T) {
 	}
 	if version != 3 {
 		t.Fatalf("version after update = %d, want 3", version)
+	}
+}
+
+func TestFlagRepository_Snapshot_ScopedToEnvironment(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	seedEnvironment(t, pool, "e1")
+	seedEnvironment(t, pool, "e2")
+	repo := NewFlagRepository(pool)
+
+	for _, f := range []domain.Flag{
+		{ID: "1", EnvironmentID: "e1", Key: "a"},
+		{ID: "2", EnvironmentID: "e2", Key: "a"},
+		{ID: "3", EnvironmentID: "e2", Key: "b"},
+	} {
+		if _, err := repo.Create(ctx, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	v1, f1, err := repo.Snapshot(ctx, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1 != 1 || len(f1) != 1 {
+		t.Fatalf("e1 snapshot = (version %d, %d flags), want (1, 1)", v1, len(f1))
+	}
+
+	v2, f2, err := repo.Snapshot(ctx, "e2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2 != 2 || len(f2) != 2 {
+		t.Fatalf("e2 snapshot = (version %d, %d flags), want (2, 2)", v2, len(f2))
 	}
 }
