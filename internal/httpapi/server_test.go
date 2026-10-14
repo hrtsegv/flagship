@@ -605,3 +605,56 @@ func TestStream_ExtendsServerWriteDeadline(t *testing.T) {
 		t.Fatalf("frame after ordinary write deadline = (%d, %+v)", id, payload)
 	}
 }
+
+func TestMutationRequests_RejectInvalidJSONWithoutChangingState(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"unknown field", `{"key":"surprise","name":"Surprise","enabld":true}`, http.StatusBadRequest},
+		{"second JSON value", `{"key":"surprise","name":"Surprise"} {}`, http.StatusBadRequest},
+		{"trailing garbage", `{"key":"surprise","name":"Surprise"} garbage`, http.StatusBadRequest},
+		{"null", `null`, http.StatusBadRequest},
+		{"oversized body", `{"description":"` + strings.Repeat("x", 1<<20) + `"}`, http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestServer()
+			project := createProject(t, h)
+			env := createEnvironment(t, h, project.ID)
+			flag := createFlag(t, h, env.ID)
+			before := doRequest(t, h, http.MethodGet, "/api/v1/environments/"+env.ID+"/configuration", nil).Body.String()
+			for _, route := range []struct{ method, path string }{
+				{http.MethodPost, "/api/v1/projects"},
+				{http.MethodPost, "/api/v1/projects/" + project.ID + "/environments"},
+				{http.MethodPost, "/api/v1/environments/" + env.ID + "/flags"},
+				{http.MethodPatch, "/api/v1/flags/" + flag.ID},
+			} {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest(route.method, route.path, strings.NewReader(tc.body)))
+				if rec.Code != tc.status {
+					t.Fatalf("%s %s = %d %s, want %d", route.method, route.path, rec.Code, rec.Body.String(), tc.status)
+				}
+			}
+			after := doRequest(t, h, http.MethodGet, "/api/v1/environments/"+env.ID+"/configuration", nil).Body.String()
+			if before != after {
+				t.Fatal("rejected mutation changed the flags or configuration version")
+			}
+		})
+	}
+}
+
+func TestFlags_EmptyPatchStillAdvancesConfiguration(t *testing.T) {
+	h := newTestServer()
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	flag := createFlag(t, h, env.ID)
+	rec := doRequest(t, h, http.MethodPatch, "/api/v1/flags/"+flag.ID, struct{}{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty patch = %d %s", rec.Code, rec.Body.String())
+	}
+	updated := decodeBody[flagResponse](t, rec)
+	configuration := decodeBody[configurationResponse](t, doRequest(t, h, http.MethodGet, "/api/v1/environments/"+env.ID+"/configuration", nil))
+	if updated.Version != 2 || configuration.Version != 2 || updated.Enabled != flag.Enabled {
+		t.Fatalf("empty patch changed semantics: flag = %+v, configuration = %+v", updated, configuration)
+	}
+}

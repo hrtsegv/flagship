@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/hrtsegv/flagship/internal/app"
@@ -13,8 +12,7 @@ type projectHandler struct {
 
 func (h *projectHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req createProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrorResponse(w, http.StatusBadRequest, "invalid_request_body", "The request body is not valid JSON.")
+	if !decodeRequest(w, r, &req) {
 		return
 	}
 

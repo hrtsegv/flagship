@@ -138,6 +138,10 @@ Flag patches use pointer fields so an omitted field differs from an explicit
 `errors.Is`: not found -> 404, duplicate key -> 409, validation -> 400, other
 errors -> 500. Handler-generated JSON errors use
 `{"error":{"code":"...","message":"..."}}`; malformed JSON also returns 400.
+Mutation bodies must be one JSON object with known fields. The shared decoder
+in [request.go](../internal/httpapi/request.go) rejects `null`, trailing data,
+and bodies over 1 MiB (413) before invoking a use case. Empty flag patches are
+still valid mutations.
 
 The configuration response has this shape:
 

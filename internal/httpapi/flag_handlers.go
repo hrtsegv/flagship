@@ -30,8 +30,7 @@ func (h *flagHandler) create(w http.ResponseWriter, r *http.Request) {
 	environmentID := r.PathValue("environmentID")
 
 	var req createFlagRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrorResponse(w, http.StatusBadRequest, "invalid_request_body", "The request body is not valid JSON.")
+	if !decodeRequest(w, r, &req) {
 		return
 	}
 
@@ -206,8 +205,7 @@ func (h *flagHandler) update(w http.ResponseWriter, r *http.Request) {
 	flagID := r.PathValue("flagID")
 
 	var req updateFlagRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrorResponse(w, http.StatusBadRequest, "invalid_request_body", "The request body is not valid JSON.")
+	if !decodeRequest(w, r, &req) {
 		return
 	}
 

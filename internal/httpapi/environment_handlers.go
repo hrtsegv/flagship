@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/hrtsegv/flagship/internal/app"
@@ -15,8 +14,7 @@ func (h *environmentHandler) create(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("projectID")
 
 	var req createEnvironmentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrorResponse(w, http.StatusBadRequest, "invalid_request_body", "The request body is not valid JSON.")
+	if !decodeRequest(w, r, &req) {
 		return
 	}
 

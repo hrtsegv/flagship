@@ -92,7 +92,7 @@ fast unit test suite uses, but the server binary requires PostgreSQL):
   configuration changes, with resume-after-disconnect via `Last-Event-ID`
   and no gap or duplicate at the replay→live handoff
 - Consistent JSON error responses (`404` for missing resources, `409` for
-  key conflicts, `400` for validation failures)
+  key conflicts, `400` for validation failures, `413` for oversized bodies)
 - Configurable listening, graceful shutdown, structured lifecycle logs, and
   `/healthz` and `/readyz` probes; SSE writes have a renewable timeout
 
@@ -146,6 +146,11 @@ timeout, and a 30-second write timeout. SSE renews the write deadline for
 every frame, so healthy streams can stay open while stalled writes time out.
 
 Create a project, an environment, and a flag, then read it back:
+
+Mutation requests accept one JSON object containing only supported fields,
+with a 1 MiB body limit. Unknown fields, trailing JSON/data, and a `null` body
+are rejected before any mutation. An empty flag patch (`{}`) remains valid
+and increments versions as usual.
 
 ```bash
 curl -s -X POST localhost:8080/api/v1/projects \
