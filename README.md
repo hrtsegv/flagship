@@ -338,13 +338,16 @@ The goal is a complete single-instance platform as defined in
 - [x] PostgreSQL persistence for the control plane
 - [x] Example application demonstrating the full loop end-to-end
 
-Remaining work, roughly in order:
+Completion checklist, roughly in order:
 
 - [x] Synchronization recovery: recover from expired replay history and
   slow-consumer event loss without waiting for another mutation; verify
   durable state across repository restarts and reconnect behavior end to end
 - [x] Server operational hardening: configurable listen address, graceful
   shutdown, and HTTP timeouts compatible with long-lived SSE connections
+- [x] SDK state validation and bounded, strict JSON mutation requests
+- [ ] SDK transport hardening: bounded bootstrap/recovery requests, stalled
+  stream detection, and validation/size limits for SSE payloads
 - [ ] Observability: request/error and synchronization metrics, structured
   request logs, and operator guidance (lifecycle logs and health/readiness
   checks are implemented)
@@ -359,6 +362,9 @@ Remaining work, roughly in order:
   rollouts, and change history through the authenticated API
 - [ ] Release readiness: deployment and upgrade instructions, backup/restore
   verification, full workflow tests, and documented single-instance capacity
+
+See [the completion audit](docs/COMPLETION_AUDIT.md) for implementation evidence,
+remaining gaps, and the acceptance checks for these milestones.
 
 ## Project layout
 

@@ -8,6 +8,7 @@ before changing it. Start with [AGENTS.md](../AGENTS.md) for working guidance.
 The [README](../README.md) owns the product description and roadmap. The
 [contributing guide](../CONTRIBUTING.md) owns local setup and coding conventions.
 This file supplies navigation and details that are easy to miss in those guides.
+The [completion audit](COMPLETION_AUDIT.md) records remaining gaps and release gates.
 
 ## Product direction
 
