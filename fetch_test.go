@@ -77,7 +77,7 @@ func TestApplyEvent_GapRecovery_AgainstRealServer(t *testing.T) {
 	projectSvc := app.NewProjectService(projectRepo)
 	environmentSvc := app.NewEnvironmentService(environmentRepo, projectRepo)
 	flagSvc := app.NewFlagService(flagRepo, environmentRepo)
-	server := httptest.NewServer(httpapi.NewServer(projectSvc, environmentSvc, flagSvc))
+	server := httptest.NewServer(httpapi.NewServer(projectSvc, environmentSvc, flagSvc, nil))
 	defer server.Close()
 
 	ctx := context.Background()

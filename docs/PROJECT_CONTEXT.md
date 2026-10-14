@@ -1,9 +1,9 @@
 # Flagship project context
 
-Implementation notes for future development sessions, explored on 2026-10-11
+Implementation notes for future development sessions, originally explored on 2026-10-11
 at revision `df6d52c` (`Lock the flag row in Update and Delete's read-modify-write`).
-These notes describe that revision; verify the current implementation before
-changing it. Start with [AGENTS.md](../AGENTS.md) for working guidance.
+Behavior notes are updated as changes land; verify the current implementation
+before changing it. Start with [AGENTS.md](../AGENTS.md) for working guidance.
 
 The [README](../README.md) owns the product description and roadmap. The
 [contributing guide](../CONTRIBUTING.md) owns local setup and coding conventions.
@@ -115,6 +115,10 @@ changing repository contracts, update both implementations and their tests.
 Routes are registered explicitly with method-aware `http.ServeMux` patterns in
 [server.go](../internal/httpapi/server.go). All paths below start with `/api/v1`.
 
+The operational routes `GET /healthz` and `GET /readyz` are outside that prefix.
+Liveness does not query PostgreSQL. Readiness invokes the injected database
+check with a two-second deadline and returns 503 if it fails or is unconfigured.
+
 | Methods | Path | Purpose |
 | --- | --- | --- |
 | POST, GET | `/projects` | Create/list projects |
@@ -194,6 +198,8 @@ Important protocol details:
 | Bootstrap, cancellation, live updates, reconnects, same-connection recovery | Root `sync_test.go` |
 | Entity rules and service validation/parent checks | `internal/domain/*_test.go`, `internal/app/*_test.go` |
 | Routes, JSON errors, CRUD, snapshots, replay/live streaming | `internal/httpapi/server_test.go` |
+| Probe isolation, readiness failures/deadlines | `internal/httpapi/health_test.go` |
+| Runtime config, SSE shutdown, bounded forced shutdown | `cmd/flagship/main_test.go` |
 | Repository uniqueness, versions, concurrency, retention, replay/live handoff | `internal/memory/*_test.go`, `internal/postgres/*_test.go` |
 
 SDK/API integration tests use `httptest` and the real application/HTTP layers
@@ -224,9 +230,11 @@ Checks are formatting, vet, lint, build, tests, and race tests.
 - PostgreSQL state is durable, but live delivery is in-process. Separate
   server/repository instances do not receive each other's publications. One
   active server is the supported deployment; horizontal scaling is outside scope.
-- The server requires `DATABASE_URL`, runs migrations automatically, and
-  listens on a constant `:8080`. It currently calls `http.ListenAndServe`
-  directly; there is no configured graceful-shutdown path.
+- The server requires `DATABASE_URL` and runs migrations automatically.
+  `HTTP_ADDR` defaults to `:8080`; `SHUTDOWN_TIMEOUT` defaults to `10s`.
+  SIGINT/SIGTERM cancels request contexts, including SSE, and initiates bounded
+  shutdown before the database pool closes. Header/read/write/idle timeouts are
+  5/15/30/60 seconds. SSE renews its 30-second write deadline per frame.
 - Authentication, targeting/rollouts, and operational features remain roadmap
   work; consult the README for the current list before assuming they exist.
 - `UpdateSnapshot` currently compares versions only; it does not validate

@@ -51,7 +51,7 @@ func newRealFlagshipServer(t *testing.T) (server *httptest.Server, flagSvc *app.
 	projectSvc := app.NewProjectService(projectRepo)
 	environmentSvc := app.NewEnvironmentService(environmentRepo, projectRepo)
 	flagSvc = app.NewFlagService(flagRepo, environmentRepo)
-	server = httptest.NewServer(httpapi.NewServer(projectSvc, environmentSvc, flagSvc))
+	server = httptest.NewServer(httpapi.NewServer(projectSvc, environmentSvc, flagSvc, nil))
 
 	ctx := context.Background()
 	project, err := projectSvc.Create(ctx, app.CreateProjectInput{Key: "ecommerce", Name: "Ecommerce"})

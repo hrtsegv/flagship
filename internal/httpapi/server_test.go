@@ -24,7 +24,7 @@ func newTestServer() http.Handler {
 	environmentSvc := app.NewEnvironmentService(environmentRepo, projectRepo)
 	flagSvc := app.NewFlagService(flagRepo, environmentRepo)
 
-	return NewServer(projectSvc, environmentSvc, flagSvc)
+	return NewServer(projectSvc, environmentSvc, flagSvc, nil)
 }
 
 func doRequest(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -572,5 +572,36 @@ func TestStream_NotReplayableStillDeliversLiveEvents(t *testing.T) {
 	id, _, p2 := readSSEFrame(t, reader)
 	if id != 2 || !p2.Enabled {
 		t.Fatalf("live frame after non-replayable connect = (id=%d, payload=%+v), want id=2 enabled=true", id, p2)
+	}
+}
+
+func TestStream_ExtendsServerWriteDeadline(t *testing.T) {
+	h := newTestServer()
+	project := createProject(t, h)
+	env := createEnvironment(t, h, project.ID)
+	flag := createFlag(t, h, env.ID)
+	server := httptest.NewUnstartedServer(h)
+	server.Config.WriteTimeout = 10 * time.Millisecond
+	server.Start()
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 2 * time.Second
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/environments/"+env.ID+"/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Last-Event-ID", "1")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	// Leave the stream idle beyond the ordinary response deadline, then
+	// verify that a new frame can still be delivered on the same connection.
+	time.Sleep(30 * time.Millisecond)
+	doRequest(t, h, http.MethodPatch, "/api/v1/flags/"+flag.ID, updateFlagRequest{Enabled: boolPtr(true)})
+	id, _, payload := readSSEFrame(t, bufio.NewReader(resp.Body))
+	if id != 2 || !payload.Enabled {
+		t.Fatalf("frame after ordinary write deadline = (%d, %+v)", id, payload)
 	}
 }

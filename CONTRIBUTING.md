@@ -37,7 +37,10 @@ go run ./cmd/flagship
 ```
 
 Schema migrations run automatically on startup — there's no separate
-migration step. The server listens on `:8080`. See the **Quick start**
+migration step. The server listens on `:8080` by default; override it with
+`HTTP_ADDR`. `SHUTDOWN_TIMEOUT` defaults to `10s`. SIGINT/SIGTERM shuts down
+the server and cancels live streams. Check `/healthz` for liveness and
+`/readyz` for database readiness. See the **Quick start**
 section of the README for example `curl` commands against it.
 
 ## Running the tests

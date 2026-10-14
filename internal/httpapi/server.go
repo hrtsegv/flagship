@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/hrtsegv/flagship/internal/app"
@@ -8,8 +9,13 @@ import (
 
 // NewServer wires the HTTP routes to their handlers and returns the
 // resulting http.Handler.
-func NewServer(projects *app.ProjectService, environments *app.EnvironmentService, flags *app.FlagService) http.Handler {
+// checkReady verifies the production database is reachable. A nil check
+// leaves readiness unavailable while liveness and API routes still work.
+func NewServer(projects *app.ProjectService, environments *app.EnvironmentService, flags *app.FlagService, checkReady func(context.Context) error) http.Handler {
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /healthz", live)
+	mux.HandleFunc("GET /readyz", readiness(checkReady))
 
 	ph := &projectHandler{svc: projects}
 	eh := &environmentHandler{svc: environments}

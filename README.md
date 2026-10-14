@@ -93,6 +93,8 @@ fast unit test suite uses, but the server binary requires PostgreSQL):
   and no gap or duplicate at the replay→live handoff
 - Consistent JSON error responses (`404` for missing resources, `409` for
   key conflicts, `400` for validation failures)
+- Configurable listening, graceful shutdown, structured lifecycle logs, and
+  `/healthz` and `/readyz` probes; SSE writes have a renewable timeout
 
 **Go SDK** (root package, `flagship`) — local, concurrency-safe boolean flag
 evaluation, plus the client-side half of the versioned sync protocol:
@@ -130,6 +132,17 @@ migrations run automatically on startup):
 export DATABASE_URL=postgres://user:pass@localhost:5432/flagship?sslmode=disable
 go run ./cmd/flagship
 ```
+
+The default listen address is `:8080`; set `HTTP_ADDR` to override it.
+`SHUTDOWN_TIMEOUT` defaults to `10s` and must be a positive Go duration.
+SIGINT/SIGTERM cancels active streams, stops accepting requests, and gives
+handlers up to that timeout to finish before closing remaining connections.
+
+`GET /healthz` reports process liveness. `GET /readyz` checks PostgreSQL with
+a two-second deadline and returns `503` when the database is unavailable.
+Normal HTTP requests have a five-second header timeout, a 15-second read
+timeout, and a 30-second write timeout. SSE renews the write deadline for
+every frame, so healthy streams can stay open while stalled writes time out.
 
 Create a project, an environment, and a flag, then read it back:
 
@@ -321,9 +334,11 @@ Remaining work, roughly in order:
 - [x] Synchronization recovery: recover from expired replay history and
   slow-consumer event loss without waiting for another mutation; verify
   durable state across repository restarts and reconnect behavior end to end
-- [ ] Server operational hardening: configurable listen address, graceful
+- [x] Server operational hardening: configurable listen address, graceful
   shutdown, and HTTP timeouts compatible with long-lived SSE connections
-- [ ] Observability: structured logs, metrics, and health/readiness checks
+- [ ] Observability: request/error and synchronization metrics, structured
+  request logs, and operator guidance (lifecycle logs and health/readiness
+  checks are implemented)
 - [ ] Authentication/authorization: protected administration and scoped,
   read-only SDK credentials for configuration fetches and streams
 - [ ] Targeting rules: evaluate against application-supplied attributes such

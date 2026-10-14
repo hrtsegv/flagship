@@ -69,7 +69,7 @@ and entity rules in `domain`. SDK production code stays independent of
 Run commands from the repository root:
 
 ```bash
-go run ./cmd/flagship            # requires DATABASE_URL; listens on :8080
+go run ./cmd/flagship            # requires DATABASE_URL; HTTP_ADDR defaults to :8080
 go run ./example -environment=<environmentID>
 go test ./...
 go test -race ./...             # requires cgo

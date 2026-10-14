@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -16,6 +17,10 @@ import (
 // use or tests -- its only job is to keep the connection alive through
 // intermediaries (proxies, load balancers) that time out idle streams.
 const streamHeartbeatInterval = 20 * time.Second
+
+// Renewed for each frame, so a healthy stream can live indefinitely while
+// a peer that stops reading cannot hold the handler forever.
+const streamWriteTimeout = 30 * time.Second
 
 type flagHandler struct {
 	svc *app.FlagService
@@ -123,7 +128,7 @@ func (h *flagHandler) stream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sub.Unsubscribe()
 
-	flusher, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		writeErrorResponse(w, http.StatusInternalServerError, "internal_error", "Streaming is not supported.")
 		return
@@ -133,14 +138,16 @@ func (h *flagHandler) stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	if !writeStreamFrame(w, "") {
+		return
+	}
 
 	if !sub.Replayable {
 		data, err := json.Marshal(configurationResetPayload{Environment: sub.Environment.Key})
 		if err != nil {
 			return
 		}
-		if _, err := fmt.Fprintf(w, "event: configuration.reset\ndata: %s\n\n", data); err != nil {
+		if !writeStreamFrame(w, fmt.Sprintf("event: configuration.reset\ndata: %s\n\n", data)) {
 			return
 		}
 	}
@@ -149,7 +156,6 @@ func (h *flagHandler) stream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	flusher.Flush()
 
 	heartbeat := time.NewTicker(streamHeartbeatInterval)
 	defer heartbeat.Stop()
@@ -165,12 +171,10 @@ func (h *flagHandler) stream(w http.ResponseWriter, r *http.Request) {
 			if !writeConfigEvent(w, sub.Environment.Key, e) {
 				return
 			}
-			flusher.Flush()
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+			if !writeStreamFrame(w, ": heartbeat\n\n") {
 				return
 			}
-			flusher.Flush()
 		}
 	}
 }
@@ -184,8 +188,18 @@ func writeConfigEvent(w http.ResponseWriter, environmentKey string, e domain.Con
 	if err != nil {
 		return false
 	}
-	_, err = fmt.Fprintf(w, "id: %d\nevent: configuration.updated\ndata: %s\n\n", e.Version, data)
-	return err == nil
+	return writeStreamFrame(w, fmt.Sprintf("id: %d\nevent: configuration.updated\ndata: %s\n\n", e.Version, data))
+}
+
+func writeStreamFrame(w http.ResponseWriter, frame string) bool {
+	controller := http.NewResponseController(w)
+	if err := controller.SetWriteDeadline(time.Now().Add(streamWriteTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return false
+	}
+	if _, err := fmt.Fprint(w, frame); err != nil {
+		return false
+	}
+	return controller.Flush() == nil
 }
 
 func (h *flagHandler) update(w http.ResponseWriter, r *http.Request) {
