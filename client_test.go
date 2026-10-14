@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+func TestClient_UpdateSnapshotRejectsDifferentEnvironment(t *testing.T) {
+	client := NewClient(NewSnapshot("production", 1, []Flag{{Key: "a", Enabled: true}}))
+	if client.UpdateSnapshot(NewSnapshot("staging", 2, []Flag{{Key: "a", Enabled: false}})) {
+		t.Fatal("installed a snapshot from a different environment")
+	}
+	if !client.Bool("a", false) || client.snapshot.Load().Version() != 1 {
+		t.Fatal("wrong-environment snapshot changed the current configuration")
+	}
+}
+
 func TestClient_Bool_ExistingEnabledFlag(t *testing.T) {
 	snap := NewSnapshot("production", 1, []Flag{{Key: "new-checkout", Enabled: true}})
 	client := NewClient(snap)

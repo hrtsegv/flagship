@@ -108,7 +108,8 @@ evaluation, plus the client-side half of the versioned sync protocol:
   sequentially: stale/duplicate events are ignored, and any gap (or no
   snapshot yet) reports `ErrVersionGap` instead of guessing
 - `FetchSnapshot` — the one recovery mechanism for every kind of gap: fetch
-  the authoritative configuration and install it wholesale
+  the authoritative configuration and install it wholesale; incomplete or
+  malformed snapshots are rejected
 - `flagship.Sync` — run it in a goroutine and it connects to `/stream`,
   applies events as they arrive, recovers from a gap on the *same*
   connection (no reconnect needed), and reconnects with jittered
@@ -267,7 +268,10 @@ constructed directly, fetched once with `FetchSnapshot`, or kept live with
 - **Versions are compared, not trusted.** Installing a snapshot only
   succeeds if its version is strictly newer than what's currently held. An
   older or equal-version snapshot is silently rejected, whether it arrives
-  via a full fetch or as one `ConfigEvent` in a sequence.
+  via a full fetch or as one `ConfigEvent` in a sequence. A configured client
+  also rejects snapshots from a different environment. Unsupported next-version
+  mutation types or empty flag keys return `ErrInvalidEvent` without advancing
+  state; `Sync` recovers through an authoritative snapshot.
 - **A gap is a gap, however it happened.** `ApplyEvent` doesn't distinguish
   "missed one update" from "brand new client" — both fail the same
   sequential check and get the same fix: fetch a full snapshot and install

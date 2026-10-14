@@ -14,6 +14,46 @@ import (
 	"github.com/hrtsegv/flagship/internal/memory"
 )
 
+func TestFetchSnapshot_RejectsIncompleteOrInvalidState(t *testing.T) {
+	for _, payload := range []string{
+		`{"version":-1,"environment":"production","flags":[]}`,
+		`{"version":1,"environment":"","flags":[]}`,
+		`{"environment":"production","flags":[]}`,
+		`{"version":1,"environment":"production"}`,
+		`{"version":1,"environment":"production","flags":null}`,
+		`{"version":1,"environment":"production","flags":[{"key":"","enabled":true}]}`,
+		`{"version":1,"environment":"production","flags":[{"key":"a"}]}`,
+		`{"version":1,"environment":"production","flags":[{"key":"a","enabled":null}]}`,
+		`{"version":1,"environment":"production","flags":[{"key":"a","enabled":true},{"key":"a","enabled":false}]}`,
+		`{"version":1,"environment":"production","flags":[]} {}`,
+	} {
+		t.Run(payload, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(payload))
+			}))
+			defer server.Close()
+			if snapshot, err := flagship.FetchSnapshot(context.Background(), server.Client(), server.URL, "e1"); err == nil || snapshot != nil {
+				t.Fatalf("invalid snapshot = (%v, %v), want nil and an error", snapshot, err)
+			}
+		})
+	}
+}
+
+func TestFetchSnapshot_AcceptsEmptyEnvironmentConfigurationAndUnknownFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"version":0,"environment":"production","flags":[],"future_field":true}`))
+	}))
+	defer server.Close()
+	snapshot, err := flagship.FetchSnapshot(context.Background(), server.Client(), server.URL, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := flagship.NewClient(snapshot)
+	if snapshot.Version() != 0 || snapshot.Environment() != "production" || !client.Bool("missing", true) {
+		t.Fatal("empty configuration did not preserve identity, version, or fallback")
+	}
+}
+
 func TestFetchSnapshot_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

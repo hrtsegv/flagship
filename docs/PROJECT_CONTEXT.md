@@ -237,12 +237,12 @@ Checks are formatting, vet, lint, build, tests, and race tests.
   5/15/30/60 seconds. SSE renews its 30-second write deadline per frame.
 - Authentication, targeting/rollouts, and operational features remain roadmap
   work; consult the README for the current list before assuming they exist.
-- `UpdateSnapshot` currently compares versions only; it does not validate
-  environment identity. `ApplyEvent` performs an environment check after its
-  missing-snapshot/forward-gap check. Do not assume broader validation than
-  these methods implement.
-- Some code comments still refer to future sync. The current binary uses
-  PostgreSQL, and SSE synchronization is implemented end to end.
+- `UpdateSnapshot` rejects a different environment once the client is configured.
+  `ApplyEvent` checks the environment before the version, and rejects unsupported
+  next-version mutation types or blank flag keys with `ErrInvalidEvent`.
+  `Sync` recovers invalid mutations through a full snapshot. `FetchSnapshot`
+  requires a nonnegative version, environment, flags array, and unique flag keys
+  with explicit boolean values; trailing JSON values are rejected.
 
 ## Exploration baseline
 

@@ -404,3 +404,31 @@ func TestSync_RecoversFromGapWithoutReconnecting(t *testing.T) {
 		t.Fatalf("stream connections = %d, want exactly 1: gap recovery must not require reconnecting", n)
 	}
 }
+
+func TestSync_InvalidMutationRecoversSnapshotOnSameStream(t *testing.T) {
+	var connections, fetches atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/environments/e1/stream", func(w http.ResponseWriter, r *http.Request) {
+		connections.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: configuration.updated\ndata: {\"environment\":\"production\",\"version\":2,\"type\":\"unknown\",\"flag_key\":\"a\",\"enabled\":false}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	mux.HandleFunc("GET /api/v1/environments/e1/configuration", func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		_, _ = fmt.Fprint(w, `{"environment":"production","version":2,"flags":[{"key":"a","enabled":true}]}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := flagship.NewClient(flagship.NewSnapshot("production", 1, []flagship.Flag{{Key: "a", Enabled: false}}))
+	go func() {
+		_ = flagship.Sync(ctx, client, flagship.SyncConfig{BaseURL: server.URL, EnvironmentID: "e1"})
+	}()
+	waitForBool(t, client, "a", false, true)
+	if connections.Load() != 1 || fetches.Load() != 1 {
+		t.Fatalf("recovery connections/fetches = %d/%d, want 1/1", connections.Load(), fetches.Load())
+	}
+}

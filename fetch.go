@@ -3,17 +3,20 @@ package flagship
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 type configurationPayload struct {
-	Version     int    `json:"version"`
+	Version     *int   `json:"version"`
 	Environment string `json:"environment"`
 	Flags       []struct {
 		Key     string `json:"key"`
-		Enabled bool   `json:"enabled"`
+		Enabled *bool  `json:"enabled"`
 	} `json:"flags"`
 }
 
@@ -50,14 +53,29 @@ func FetchSnapshot(ctx context.Context, httpClient *http.Client, baseURL, enviro
 	}
 
 	var payload configurationPayload
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("flagship: decoding configuration: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, errors.New("flagship: configuration must contain one JSON value")
+	}
+	if payload.Version == nil || *payload.Version < 0 || strings.TrimSpace(payload.Environment) == "" || payload.Flags == nil {
+		return nil, errors.New("flagship: configuration requires a nonnegative version, an environment, and a flags array")
 	}
 
 	flags := make([]Flag, 0, len(payload.Flags))
+	keys := make(map[string]struct{}, len(payload.Flags))
 	for _, f := range payload.Flags {
-		flags = append(flags, Flag{Key: f.Key, Enabled: f.Enabled})
+		if strings.TrimSpace(f.Key) == "" || f.Enabled == nil {
+			return nil, errors.New("flagship: each configuration flag requires a key and a boolean value")
+		}
+		if _, exists := keys[f.Key]; exists {
+			return nil, fmt.Errorf("flagship: configuration contains duplicate flag key %q", f.Key)
+		}
+		keys[f.Key] = struct{}{}
+		flags = append(flags, Flag{Key: f.Key, Enabled: *f.Enabled})
 	}
 
-	return NewSnapshot(payload.Environment, payload.Version, flags), nil
+	return NewSnapshot(payload.Environment, *payload.Version, flags), nil
 }

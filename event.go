@@ -10,7 +10,7 @@ const (
 )
 
 // ConfigEvent is one versioned, incremental change to an environment's
-// configuration, as delivered by a (future) push transport. Version
+// configuration, as delivered by the SSE push transport. Version
 // doubles as the event's identity: applying the events for an environment
 // in strictly increasing version order, starting from an empty
 // configuration, always produces the same result — see

@@ -195,7 +195,7 @@ func connectAndStream(ctx context.Context, client *Client, httpClient *http.Clie
 			if err == nil {
 				continue
 			}
-			if !errors.Is(err, ErrVersionGap) {
+			if !errors.Is(err, ErrVersionGap) && !errors.Is(err, ErrInvalidEvent) {
 				return err // includes ErrWrongEnvironment
 			}
 		}

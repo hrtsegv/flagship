@@ -8,6 +8,7 @@ package flagship
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 )
 
@@ -25,6 +26,11 @@ var ErrVersionGap = errors.New("flagship: event does not sequentially follow the
 // caller misuse (an event routed to the wrong client), not a normal gap
 // in the protocol.
 var ErrWrongEnvironment = errors.New("flagship: event environment does not match the client's current snapshot")
+
+// ErrInvalidEvent is returned for an unsupported mutation type or an empty
+// flag key at the next configuration version. Invalid events never advance
+// the client's version; Sync recovers through an authoritative snapshot.
+var ErrInvalidEvent = errors.New("flagship: invalid configuration event")
 
 // Client evaluates feature flags against a locally held configuration
 // snapshot. It is safe for concurrent use by multiple goroutines.
@@ -68,16 +74,15 @@ func (c *Client) Bool(key string, defaultValue bool) bool {
 // bootstrap fetch, or recovery after ApplyEvent reports ErrVersionGap) may
 // reasonably fetch a snapshot that turns out to already be current.
 //
-// UpdateSnapshot exists for a future configuration-sync mechanism to
-// install new configuration as it arrives; most application code only
-// needs Bool.
+// Once configured, a client also rejects snapshots for a different
+// environment. Create a separate Client for each environment.
 func (c *Client) UpdateSnapshot(next *Snapshot) bool {
 	if next == nil {
 		return false
 	}
 	for {
 		current := c.snapshot.Load()
-		if current != nil && next.version <= current.version {
+		if current != nil && (next.environment != current.environment || next.version <= current.version) {
 			return false
 		}
 		if c.snapshot.CompareAndSwap(current, next) {
@@ -98,19 +103,24 @@ func (c *Client) UpdateSnapshot(next *Snapshot) bool {
 //     version, e is a stale or duplicate event: it's silently ignored,
 //     and ApplyEvent returns (false, nil).
 //   - If e.Environment doesn't match the client's current snapshot,
-//     ApplyEvent returns ErrWrongEnvironment without changing state.
+//     ApplyEvent returns ErrWrongEnvironment before checking its version.
+//   - If a next-version event has an unsupported type or an empty flag
+//     key, ApplyEvent returns ErrInvalidEvent without advancing the version.
 //   - Otherwise e is applied atomically and ApplyEvent returns (true, nil).
 func (c *Client) ApplyEvent(e ConfigEvent) (applied bool, err error) {
 	for {
 		current := c.snapshot.Load()
+		if current != nil && current.environment != e.Environment {
+			return false, ErrWrongEnvironment
+		}
 		if current == nil || e.Version > current.version+1 {
 			return false, ErrVersionGap
 		}
-		if current.environment != e.Environment {
-			return false, ErrWrongEnvironment
-		}
 		if e.Version <= current.version {
 			return false, nil
+		}
+		if strings.TrimSpace(e.FlagKey) == "" || (e.Type != EventFlagCreated && e.Type != EventFlagUpdated && e.Type != EventFlagDeleted) {
+			return false, ErrInvalidEvent
 		}
 		next := current.nextSnapshot(e)
 		if c.snapshot.CompareAndSwap(current, next) {

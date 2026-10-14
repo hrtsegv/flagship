@@ -121,6 +121,28 @@ func TestClient_ApplyEvent_WrongEnvironment(t *testing.T) {
 	}
 }
 
+func TestClient_ApplyEvent_WrongEnvironmentTakesPriorityOverGap(t *testing.T) {
+	client := NewClient(NewSnapshot("production", 1, nil))
+	if _, err := client.ApplyEvent(ConfigEvent{Environment: "staging", Version: 100}); !errors.Is(err, ErrWrongEnvironment) {
+		t.Fatalf("wrong environment with version gap = %v, want ErrWrongEnvironment", err)
+	}
+}
+
+func TestClient_ApplyEvent_InvalidNextEventDoesNotAdvanceVersion(t *testing.T) {
+	for _, event := range []ConfigEvent{
+		{Environment: "production", Version: 2, Type: "unknown", FlagKey: "a"},
+		{Environment: "production", Version: 2, Type: EventFlagUpdated, FlagKey: ""},
+	} {
+		client := NewClient(NewSnapshot("production", 1, []Flag{{Key: "a", Enabled: true}}))
+		if applied, err := client.ApplyEvent(event); applied || !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("invalid event = (%v, %v), want no application and an error", applied, err)
+		}
+		if client.snapshot.Load().Version() != 1 || !client.Bool("a", false) {
+			t.Fatal("invalid event advanced the configuration or changed its flags")
+		}
+	}
+}
+
 func TestClient_ApplyEvent_Deletion(t *testing.T) {
 	client := NewClient(NewSnapshot("production", 1, []Flag{
 		{Key: "new-checkout", Enabled: true},
