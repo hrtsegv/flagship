@@ -18,6 +18,38 @@ ramping it out gradually — without redeploying.
 > working end-to-end — server and SDK client both. See
 > [Roadmap](#roadmap) for what's next.
 
+## Project goal and scope
+
+Build a complete, reliable, self-hosted feature-flag platform that a team can
+deploy and operate as **one Flagship server backed by PostgreSQL**. Completion
+means the flag-management workflow, local Go SDK evaluation, synchronization,
+access control, and day-to-day operations work end to end.
+
+The supported deployment has one active control-plane instance. PostgreSQL
+holds durable state; live event delivery stays within the server process.
+Multiple applications and application instances can each use the Go SDK,
+evaluate flags locally, and keep their configuration current from that server.
+
+Horizontal scaling, clustered control planes, cross-instance event delivery,
+leader election, and multi-region coordination are outside the project scope.
+They are not prerequisites for completion or deferred roadmap milestones.
+
+The project is complete when:
+
+- Teams can manage projects, environments, and boolean flags through the API
+  and a dashboard, with authenticated administration and scoped SDK read access.
+- Targeting rules and deterministic percentage rollouts evaluate locally with
+  documented behavior for missing attributes and fallback values.
+- Configuration survives server restarts. SDKs retain their last-known-good
+  configuration during outages and converge after reconnects, expired replay
+  history, or slow-consumer event loss, even without another flag mutation.
+- Durable audit history records changes and supports rollback through a new
+  versioned mutation, preserving the configuration-version invariants.
+- Operators have health/readiness checks, useful logs and metrics, graceful
+  shutdown, and documented deployment, upgrade, backup, and restore procedures.
+- End-to-end, PostgreSQL, and concurrency tests verify these workflows, with
+  documented capacity limits for the single-instance deployment.
+
 ## Why
 
 Feature flags are often evaluated in hot request paths, so a flag check
@@ -35,9 +67,9 @@ even if Flagship itself is temporarily unreachable.
 ```text
 Control Plane                          Application
 ┌─────────────────────┐                ┌───────────────────────────┐
-│ Flagship HTTP API    │  configuration │ Flagship Go SDK           │
-│ Projects/Envs/Flags  │ ─────────────► │ Snapshot (version+flags)  │
-│ In-memory repository │                │ client.Bool(key, default) │
+│ Flagship HTTP API   │  configuration │ Flagship Go SDK           │
+│ Projects/Envs/Flags │ ─────────────►  │ Snapshot (version+flags)  │
+│ PostgreSQL storage  │                │ client.Bool(key, default) │
 └─────────────────────┘                └───────────────────────────┘
 ```
 
@@ -80,9 +112,10 @@ evaluation, plus the client-side half of the versioned sync protocol:
   connection (no reconnect needed), and reconnects with jittered
   exponential backoff if the connection drops
 
-**What's intentionally not built yet:** horizontal scaling across multiple
-server instances, observability, authentication, targeting rules, percentage
-rollouts, audit history, and a dashboard. See [Roadmap](#roadmap).
+**Still to build:** operational hardening, observability, authentication and
+authorization, targeting rules, percentage rollouts, audit history and rollback,
+and a dashboard. See [Roadmap](#roadmap). Multi-instance control-plane operation
+is outside the [project scope](#project-goal-and-scope).
 
 ## Quick start
 
@@ -270,19 +303,34 @@ against the real control plane with no polling).
 
 ## Roadmap
 
-Roughly in order:
+The goal is a complete single-instance platform as defined in
+[Project goal and scope](#project-goal-and-scope). The existing foundation is:
 
 - [x] Versioned sync protocol foundation (`ApplyEvent`, gap detection, snapshot recovery)
 - [x] Server-side SSE transport (`/stream`, event log, replay-on-reconnect)
 - [x] SDK-side SSE client (`flagship.Sync` — connect, apply events, reconnect with backoff)
 - [x] PostgreSQL persistence for the control plane
 - [x] Example application demonstrating the full loop end-to-end
-- [ ] Horizontal scaling across multiple server instances
-- [ ] Observability (logging/metrics/tracing, health checks)
-- [ ] Authentication/authorization
-- [ ] Targeting rules (evaluate against request attributes like country/plan)
-- [ ] Deterministic percentage rollouts
-- [ ] Audit history and rollback
+
+Remaining work, roughly in order:
+
+- [ ] Synchronization hardening: recover from expired replay history and
+  slow-consumer event loss without waiting for another mutation; verify
+  restart, outage, and reconnect behavior end to end
+- [ ] Server operational hardening: configurable listen address, graceful
+  shutdown, and HTTP timeouts compatible with long-lived SSE connections
+- [ ] Observability: structured logs, metrics, and health/readiness checks
+- [ ] Authentication/authorization: protected administration and scoped,
+  read-only SDK credentials for configuration fetches and streams
+- [ ] Targeting rules: evaluate against application-supplied attributes such
+  as country or plan, with explicit rule ordering and fallback semantics
+- [ ] Deterministic percentage rollouts using stable subject identifiers
+- [ ] Durable audit history, separate from the bounded sync event log, and
+  rollback that creates a new configuration version
+- [ ] Dashboard for managing projects, environments, flags, targeting,
+  rollouts, and change history through the authenticated API
+- [ ] Release readiness: deployment and upgrade instructions, backup/restore
+  verification, full workflow tests, and documented single-instance capacity
 
 ## Project layout
 

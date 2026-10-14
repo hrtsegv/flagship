@@ -5,6 +5,16 @@ to test it, how the pieces fit together, and what not to break. For the
 product pitch — what Flagship is and why it's built the way it is — see
 [README.md](README.md) first if you haven't already.
 
+## Development scope
+
+Flagship targets a complete single-instance deployment: one active server
+backed by PostgreSQL, serving application instances that evaluate flags locally
+with the Go SDK. Prioritize correctness, useful flag-management features, and
+operational reliability within that deployment. Keep live event delivery in
+process; clustered servers, cross-instance fan-out, and distributed coordination
+are outside scope. See [Project goal and scope](README.md#project-goal-and-scope)
+for the completion criteria and [Roadmap](README.md#roadmap) for remaining work.
+
 ## Prerequisites
 
 - **Go**, matching the version in [go.mod](go.mod).

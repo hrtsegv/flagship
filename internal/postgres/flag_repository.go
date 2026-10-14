@@ -28,9 +28,9 @@ const subscriberBufferSize = 16
 
 // FlagRepository is a PostgreSQL-backed store of flags. Durable state
 // (flags, configuration versions, the event log) lives in the database;
-// live SSE subscriber delivery stays in-process via Go channels, which is
-// sufficient for a single server instance. Distributing live events across
-// multiple instances is a separate, deferred concern.
+// live SSE subscriber delivery stays in-process via Go channels for
+// the supported single-instance deployment. Cross-instance live event
+// delivery is outside the project scope.
 type FlagRepository struct {
 	pool *pgxpool.Pool
 
