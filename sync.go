@@ -173,7 +173,7 @@ func connectAndStream(ctx context.Context, client *Client, httpClient *http.Clie
 		if err != nil {
 			return fmt.Errorf("flagship: reading stream: %w", err)
 		}
-		if frame.event != "configuration.updated" || frame.data == "" {
+		if (frame.event != "configuration.updated" && frame.event != "configuration.reset") || frame.data == "" {
 			continue // heartbeat, comment, or an event type this SDK doesn't know about
 		}
 
@@ -181,29 +181,35 @@ func connectAndStream(ctx context.Context, client *Client, httpClient *http.Clie
 		if err := json.Unmarshal([]byte(frame.data), &payload); err != nil {
 			return fmt.Errorf("flagship: decoding stream event: %w", err)
 		}
-		event := ConfigEvent{
-			Environment: payload.Environment,
-			Version:     payload.Version,
-			Type:        ConfigEventType(payload.Type),
-			FlagKey:     payload.FlagKey,
-			Enabled:     payload.Enabled,
+		if current := client.snapshot.Load(); current != nil && current.environment != payload.Environment {
+			return ErrWrongEnvironment
 		}
-
-		if _, err := client.ApplyEvent(event); err != nil {
+		if frame.event == "configuration.updated" {
+			_, err := client.ApplyEvent(ConfigEvent{
+				Environment: payload.Environment,
+				Version:     payload.Version,
+				Type:        ConfigEventType(payload.Type),
+				FlagKey:     payload.FlagKey,
+				Enabled:     payload.Enabled,
+			})
+			if err == nil {
+				continue
+			}
 			if !errors.Is(err, ErrVersionGap) {
 				return err // includes ErrWrongEnvironment
 			}
-			recovered, ferr := FetchSnapshot(ctx, httpClient, cfg.BaseURL, cfg.EnvironmentID)
-			if ferr != nil {
-				return fmt.Errorf("flagship: recovering from version gap: %w", ferr)
-			}
-			client.UpdateSnapshot(recovered)
-			// Whatever this same connection delivers next reconciles on
-			// its own: events at or below the recovered version are now
-			// stale and ApplyEvent silently ignores them, and once the
-			// stream catches up to exactly current+1, sequential
-			// application resumes -- no reconnect required.
 		}
+		recovered, err := FetchSnapshot(ctx, httpClient, cfg.BaseURL, cfg.EnvironmentID)
+		if err != nil {
+			return fmt.Errorf("flagship: recovering configuration: %w", err)
+		}
+		if recovered.environment != payload.Environment {
+			return ErrWrongEnvironment
+		}
+		client.UpdateSnapshot(recovered)
+		// Queued events at or below the recovered version are stale.
+		// Sequential application resumes on this same connection once
+		// the stream catches up to current+1.
 	}
 }
 

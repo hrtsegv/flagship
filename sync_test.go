@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,6 +74,137 @@ func TestSync_ReturnsErrorForInvalidConfig(t *testing.T) {
 	err := flagship.Sync(context.Background(), flagship.NewClient(nil), flagship.SyncConfig{})
 	if err == nil {
 		t.Fatal("Sync() error = nil, want an error for a config with no BaseURL/EnvironmentID")
+	}
+}
+
+func TestSync_ExpiredReplayRecoversWithoutAnotherMutation(t *testing.T) {
+	server, svc, flag, environmentID := newRealFlagshipServer(t)
+	defer server.Close()
+	enabled := true
+	for i := 0; i < 1001; i++ {
+		if _, err := svc.Update(context.Background(), flag.ID, domain.FlagPatch{Enabled: &enabled}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := flagship.NewClient(flagship.NewSnapshot("production", 1, []flagship.Flag{
+		{Key: flag.Key, Enabled: false},
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = flagship.Sync(ctx, client, flagship.SyncConfig{BaseURL: server.URL, EnvironmentID: environmentID})
+	}()
+	waitForBool(t, client, flag.Key, false, true)
+}
+
+type pausedFlushWriter struct {
+	http.ResponseWriter
+	pause func()
+}
+
+func TestSync_ResetRejectsWrongEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name, resetEnvironment, snapshotEnvironment string
+	}{
+		{"reset", "staging", "production"},
+		{"recovery snapshot", "production", "staging"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /api/v1/environments/e1/stream", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "event: configuration.reset\ndata: {\"environment\":%q}\n\n", tc.resetEnvironment)
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			})
+			mux.HandleFunc("GET /api/v1/environments/e1/configuration", func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"version": 2, "environment": tc.snapshotEnvironment,
+					"flags": []map[string]any{{"key": "a", "enabled": true}},
+				})
+			})
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			client := flagship.NewClient(flagship.NewSnapshot("production", 1, []flagship.Flag{{Key: "a", Enabled: false}}))
+			err := flagship.Sync(ctx, client, flagship.SyncConfig{
+				BaseURL: server.URL, EnvironmentID: "e1",
+				MinBackoff: time.Hour, MaxBackoff: time.Hour,
+			})
+			if !errors.Is(err, flagship.ErrWrongEnvironment) {
+				t.Fatalf("Sync() = %v, want ErrWrongEnvironment", err)
+			}
+			if client.Bool("a", true) {
+				t.Fatal("wrong-environment reset changed the installed configuration")
+			}
+		})
+	}
+}
+
+func (w *pausedFlushWriter) Flush() {
+	w.ResponseWriter.(http.Flusher).Flush()
+	if w.pause != nil {
+		pause := w.pause
+		w.pause = nil
+		pause()
+	}
+}
+
+func (w *pausedFlushWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func TestSync_SlowConsumerRecoversFinalDroppedUpdate(t *testing.T) {
+	original, svc, flag, environmentID := newRealFlagshipServer(t)
+	handler := original.Config.Handler
+	original.Close()
+
+	subscribed := make(chan struct{})
+	release := make(chan struct{})
+	resume := sync.OnceFunc(func() { close(release) })
+	var connections atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/environments/"+environmentID+"/stream" && connections.Add(1) == 1 {
+			w = &pausedFlushWriter{ResponseWriter: w, pause: func() {
+				close(subscribed)
+				select {
+				case <-release:
+				case <-r.Context().Done():
+				}
+			}}
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer resume()
+	client := flagship.NewClient(flagship.NewSnapshot("production", 1, []flagship.Flag{
+		{Key: flag.Key, Enabled: false},
+	}))
+	go func() {
+		_ = flagship.Sync(ctx, client, flagship.SyncConfig{
+			BaseURL: server.URL, EnvironmentID: environmentID,
+			MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond,
+		})
+	}()
+	select {
+	case <-subscribed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not subscribe")
+	}
+	// The handler cannot drain its 16-event buffer until resume is called.
+	// The final mutation is lost by the old implementation; no later writes
+	// are made to reveal that gap.
+	for i := 0; i < 17; i++ {
+		enabled := i == 16
+		if _, err := svc.Update(ctx, flag.ID, domain.FlagPatch{Enabled: &enabled}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resume()
+	waitForBool(t, client, flag.Key, false, true)
+	if connections.Load() < 2 {
+		t.Fatal("overflowed stream was not reconnected")
 	}
 }
 

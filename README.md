@@ -111,6 +111,10 @@ evaluation, plus the client-side half of the versioned sync protocol:
   applies events as they arrive, recovers from a gap on the *same*
   connection (no reconnect needed), and reconnects with jittered
   exponential backoff if the connection drops
+- Unavailable replay history triggers a `configuration.reset` frame and an
+  immediate snapshot fetch on the same connection. A slow subscriber whose
+  buffer fills is disconnected so it reconnects and catches up, even when
+  there are no further flag changes.
 
 **Still to build:** operational hardening, observability, authentication and
 authorization, targeting rules, percentage rollouts, audit history and rollback,
@@ -314,9 +318,9 @@ The goal is a complete single-instance platform as defined in
 
 Remaining work, roughly in order:
 
-- [ ] Synchronization hardening: recover from expired replay history and
+- [x] Synchronization recovery: recover from expired replay history and
   slow-consumer event loss without waiting for another mutation; verify
-  restart, outage, and reconnect behavior end to end
+  durable state across repository restarts and reconnect behavior end to end
 - [ ] Server operational hardening: configurable listen address, graceful
   shutdown, and HTTP timeouts compatible with long-lived SSE connections
 - [ ] Observability: structured logs, metrics, and health/readiness checks

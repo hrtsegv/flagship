@@ -19,12 +19,9 @@ import (
 const maxRetainedEventsPerEnvironment = 1000
 
 // subscriberBufferSize bounds how far a live subscriber can lag before its
-// events start being dropped. Publishing happens under the same lock that
-// serializes every flag mutation, so it must never block — a full buffer
-// means the event is dropped for that subscriber rather than stalling
-// every other write in the system. A dropped live event isn't a
-// correctness problem: the SDK's version check treats it as an ordinary
-// gap and recovers via a snapshot, the same as any other gap.
+// subscription is closed. Publishing must never block writers. Closing a
+// full subscription makes the SDK reconnect and replay or fetch a snapshot,
+// even when no further mutation arrives to expose the missing event.
 const subscriberBufferSize = 16
 
 // FlagRepository is an in-memory store of flags, safe for concurrent use.
@@ -58,8 +55,7 @@ func flagKeyIndex(environmentID, key string) string {
 // r.mu for writing: bumping the version, recording what changed at that
 // version, and notifying subscribers are deliberately one indivisible
 // step, so no observer can ever see a version whose event is missing (or
-// vice versa), and a subscriber can never miss an event that was recorded
-// while it was already listening.
+// vice versa). A subscriber receives each event or is disconnected on overflow.
 func (r *FlagRepository) recordEvent(environmentID string, eventType domain.ConfigEventType, flagKey string, enabled bool) {
 	r.configVersions[environmentID]++
 
@@ -81,8 +77,12 @@ func (r *FlagRepository) recordEvent(environmentID string, eventType domain.Conf
 		select {
 		case ch <- event:
 		default:
-			// Slow consumer: drop rather than block every other writer.
+			close(ch)
+			delete(r.subscribers[environmentID], ch)
 		}
+	}
+	if len(r.subscribers[environmentID]) == 0 {
+		delete(r.subscribers, environmentID)
 	}
 }
 
@@ -231,7 +231,13 @@ func (r *FlagRepository) SubscribeFrom(ctx context.Context, environmentID string
 	unsubscribe = func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		delete(r.subscribers[environmentID], ch)
+		if _, ok := r.subscribers[environmentID][ch]; ok {
+			delete(r.subscribers[environmentID], ch)
+			close(ch)
+		}
+		if len(r.subscribers[environmentID]) == 0 {
+			delete(r.subscribers, environmentID)
+		}
 	}
 
 	return events, replayable, ch, unsubscribe

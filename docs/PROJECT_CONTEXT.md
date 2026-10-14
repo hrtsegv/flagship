@@ -59,6 +59,11 @@ initial ceiling and 30 s maximum. `Sync` blocks in its caller's goroutine and
 returns on context cancellation or `ErrWrongEnvironment`; `OnError` reports
 transient failures before retry.
 
+An unreplayable subscription sends `configuration.reset` with the environment
+key. `Sync` immediately fetches a snapshot and continues on the same stream.
+A full live buffer closes and removes that subscription, making the SDK
+reconnect and recover even when the dropped event was the last mutation.
+
 **Evaluation:** `Client.Bool` loads an `atomic.Pointer[Snapshot]`, looks up a
 boolean in a private map, and returns the caller's fallback if needed. An
 explicit `false` value is a configured value. `UpdateSnapshot` and `ApplyEvent`
@@ -158,12 +163,23 @@ Important protocol details:
 - The server validates that `Last-Event-ID` is a nonnegative integer. An
   omitted header means version 0, so retained history can be replayed from 0.
 - Both repositories retain at most 1,000 events per environment and buffer 16
-  live events per subscriber. A full buffer drops events instead of blocking
-  writers. The next observable forward gap causes SDK snapshot recovery.
+  live events per subscriber. A full buffer closes and removes the subscription
+  instead of blocking writers. Buffered events drain before EOF; the SDK then
+  reconnects using its installed version and replays or fetches a snapshot.
 - `SubscribeFrom` returns replay events, a replayable flag, a live channel,
-  and an unsubscribe function. The handler always defers unsubscribe. If
-  history is unavailable or the requested version is ahead, the current HTTP
-  implementation opens a live-only stream without an explicit reset frame.
+  and an idempotent unsubscribe function that closes and removes the channel.
+  The handler always defers unsubscribe. If history is unavailable or the
+  requested version is ahead, the HTTP layer sends this frame before live
+  events, without an SSE ID or a configuration-version advance:
+
+  ```text
+  event: configuration.reset
+  data: {"environment":"production"}
+
+  ```
+
+  The SDK fetches the authoritative configuration immediately, checks its
+  environment against the frame, and continues on the same connection.
 - The server sends comment heartbeats every 20 seconds. The SDK ignores
   comments and SSE event names other than `configuration.updated`.
 
@@ -208,10 +224,6 @@ Checks are formatting, vet, lint, build, tests, and race tests.
 - PostgreSQL state is durable, but live delivery is in-process. Separate
   server/repository instances do not receive each other's publications. One
   active server is the supported deployment; horizontal scaling is outside scope.
-- An unreplayable connection currently opens a live-only stream, and a full
-  subscriber buffer drops events. Recovery depends on a later event exposing
-  the version gap; without another mutation, an SDK can remain stale. Closing
-  this recovery gap is part of the roadmap's synchronization hardening.
 - The server requires `DATABASE_URL`, runs migrations automatically, and
   listens on a constant `:8080`. It currently calls `http.ListenAndServe`
   directly; there is no configured graceful-shutdown path.

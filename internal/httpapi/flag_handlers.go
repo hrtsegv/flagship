@@ -100,10 +100,9 @@ func (h *flagHandler) configuration(w http.ResponseWriter, r *http.Request) {
 // sends its last-applied version as Last-Event-ID; the response replays
 // whatever it missed (if the server can) before switching to live
 // delivery, with no gap or duplicate at that handoff (see
-// FlagService.Stream / FlagRepository.SubscribeFrom). A client that has
-// fallen behind further than the server retains, or that provides no
-// Last-Event-ID, just starts receiving live events with no replay: the
-// SDK's own version-gap detection covers the rest.
+// FlagService.Stream / FlagRepository.SubscribeFrom). If replay is
+// unavailable, configuration.reset requests an immediate snapshot fetch
+// before the client continues consuming the same live stream.
 func (h *flagHandler) stream(w http.ResponseWriter, r *http.Request) {
 	environmentID := r.PathValue("environmentID")
 
@@ -136,6 +135,15 @@ func (h *flagHandler) stream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	if !sub.Replayable {
+		data, err := json.Marshal(configurationResetPayload{Environment: sub.Environment.Key})
+		if err != nil {
+			return
+		}
+		if _, err := fmt.Fprintf(w, "event: configuration.reset\ndata: %s\n\n", data); err != nil {
+			return
+		}
+	}
 	for _, e := range sub.Events {
 		if !writeConfigEvent(w, sub.Environment.Key, e) {
 			return

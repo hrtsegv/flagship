@@ -57,7 +57,8 @@ and entity rules in `domain`. SDK production code stays independent of
   full snapshot fetch. Preserve wrong-environment error handling.
 - Replay history and live subscription registration must stay atomic with
   respect to mutations. Slow subscribers must not block writers. Preserve
-  unsubscribe cleanup and snapshot-based recovery.
+  idempotent unsubscribe cleanup, overflow disconnection, and immediate
+  snapshot-based recovery through `configuration.reset` when replay is unavailable.
 - Project keys are globally unique; environment keys are unique per project;
   flag keys are unique per environment. Deletion frees a flag's key for reuse.
 - API paths and SDK `EnvironmentID` use the opaque environment ID. Snapshot

@@ -620,6 +620,60 @@ func TestFlagRepository_SubscribeFrom_ConcurrentWritesNeverDuplicate(t *testing.
 	// a duplicate delivery of any single version.
 }
 
+func TestFlagRepository_SubscribeFrom_OverflowClosesOnlySlowSubscriber(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFlagRepository()
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, slow, unsubscribeSlow := repo.SubscribeFrom(ctx, "e1", 1)
+	defer unsubscribeSlow()
+	_, _, healthy, unsubscribeHealthy := repo.SubscribeFrom(ctx, "e1", 1)
+	defer unsubscribeHealthy()
+
+	for i := 0; i <= subscriberBufferSize; i++ {
+		if _, err := repo.Update(ctx, "1", domain.FlagPatch{}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case event, ok := <-healthy:
+			if !ok || event.Version != i+2 {
+				t.Fatalf("healthy subscriber = (%+v, %v), want version %d", event, ok, i+2)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("healthy subscriber stopped receiving events")
+		}
+	}
+
+	for i := 0; i < subscriberBufferSize; i++ {
+		if event, ok := <-slow; !ok || event.Version != i+2 {
+			t.Fatalf("buffered event = (%+v, %v), want version %d", event, ok, i+2)
+		}
+	}
+	select {
+	case _, ok := <-slow:
+		if ok {
+			t.Fatal("overflowed subscriber should be closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("overflowed subscriber stayed open after losing the final update")
+	}
+	// Cleanup remains safe after eviction and when called repeatedly.
+	unsubscribeSlow()
+	unsubscribeSlow()
+	if _, err := repo.Update(ctx, "1", domain.FlagPatch{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event, ok := <-healthy:
+		if !ok || event.Version != subscriberBufferSize+3 {
+			t.Fatalf("healthy subscriber after cleanup = (%+v, %v)", event, ok)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber cleanup affected the healthy subscriber")
+	}
+}
+
 func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {
 	repo := NewFlagRepository()
 

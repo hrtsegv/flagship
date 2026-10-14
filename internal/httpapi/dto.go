@@ -119,6 +119,12 @@ func toConfigurationResponse(env domain.Environment, version int, flags []domain
 	return resp
 }
 
+// configurationResetPayload requests a full snapshot without advancing the
+// client's version or claiming that a mutation was applied.
+type configurationResetPayload struct {
+	Environment string `json:"environment"`
+}
+
 // configEventPayload is the JSON shape of one SSE configuration.updated
 // event's data field.
 type configEventPayload struct {

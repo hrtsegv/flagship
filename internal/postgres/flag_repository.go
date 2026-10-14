@@ -21,9 +21,8 @@ import (
 const maxRetainedEventsPerEnvironment = 1000
 
 // subscriberBufferSize bounds how far a live subscriber can lag before its
-// events start being dropped, matching internal/memory. A dropped live
-// event isn't a correctness problem: the SDK's version check treats it as
-// an ordinary gap and recovers via a snapshot.
+// subscription is closed, matching internal/memory. The SDK reconnects
+// and replays or fetches a snapshot without waiting for another mutation.
 const subscriberBufferSize = 16
 
 // FlagRepository is a PostgreSQL-backed store of flags. Durable state
@@ -303,7 +302,13 @@ func (r *FlagRepository) SubscribeFrom(ctx context.Context, environmentID string
 	unsubscribe = func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		delete(r.subscribers[environmentID], ch)
+		if _, ok := r.subscribers[environmentID][ch]; ok {
+			delete(r.subscribers[environmentID], ch)
+			close(ch)
+		}
+		if len(r.subscribers[environmentID]) == 0 {
+			delete(r.subscribers, environmentID)
+		}
 	}
 
 	return events, replayable, ch, unsubscribe
@@ -364,15 +369,19 @@ func (r *FlagRepository) eventsSince(ctx context.Context, environmentID string, 
 }
 
 // publishLocked delivers event to every live subscriber for its
-// environment, dropping it for any subscriber whose buffer is full rather
-// than blocking. The caller must hold r.mu.
+// environment, closing and removing any subscriber whose buffer is full
+// rather than blocking. The caller must hold r.mu.
 func (r *FlagRepository) publishLocked(event domain.ConfigEvent) {
 	for ch := range r.subscribers[event.EnvironmentID] {
 		select {
 		case ch <- event:
 		default:
-			// Slow consumer: drop rather than block every other writer.
+			close(ch)
+			delete(r.subscribers[event.EnvironmentID], ch)
 		}
+	}
+	if len(r.subscribers[event.EnvironmentID]) == 0 {
+		delete(r.subscribers, event.EnvironmentID)
 	}
 }
 

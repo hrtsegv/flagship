@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hrtsegv/flagship/internal/app"
 	"github.com/hrtsegv/flagship/internal/memory"
@@ -533,8 +534,7 @@ func TestStream_ReplaysThenDeliversLiveWithoutDuplicating(t *testing.T) {
 // TestStream_NotReplayableStillDeliversLiveEvents covers the fallback
 // path: a client that can't be replayed (here, because it claims a
 // version the server never reached) still gets a working live stream
-// rather than an error or a hang. The SDK's own gap detection is what
-// makes this safe -- the server doesn't need to signal anything special.
+// after an explicit reset tells it to fetch an authoritative snapshot.
 func TestStream_NotReplayableStillDeliversLiveEvents(t *testing.T) {
 	h := newTestServer()
 	server := httptest.NewServer(h)
@@ -550,7 +550,9 @@ func TestStream_NotReplayableStillDeliversLiveEvents(t *testing.T) {
 	}
 	req.Header.Set("Last-Event-ID", "99") // ahead of the server: not replayable
 
-	resp, err := server.Client().Do(req)
+	client := server.Client()
+	client.Timeout = 2 * time.Second
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,6 +562,11 @@ func TestStream_NotReplayableStillDeliversLiveEvents(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(resp.Body)
+
+	_, resetEvent, reset := readSSEFrame(t, reader)
+	if resetEvent != "configuration.reset" || reset.Environment != env.Key {
+		t.Fatalf("first frame = (%s, %+v), want a reset for %q", resetEvent, reset, env.Key)
+	}
 
 	doRequest(t, h, http.MethodPatch, "/api/v1/flags/"+flag.ID, updateFlagRequest{Enabled: boolPtr(true)}) // v2
 	id, _, p2 := readSSEFrame(t, reader)

@@ -597,6 +597,60 @@ func TestFlagRepository_SubscribeFrom_ConcurrentWritesNeverDuplicate(t *testing.
 	// the loop above checks — is the same version arriving twice.
 }
 
+func TestFlagRepository_SubscribeFrom_OverflowClosesOnlySlowSubscriber(t *testing.T) {
+	ctx := context.Background()
+	repo := newFlagRepo(t)
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, slow, unsubscribeSlow := repo.SubscribeFrom(ctx, "e1", 1)
+	defer unsubscribeSlow()
+	_, _, healthy, unsubscribeHealthy := repo.SubscribeFrom(ctx, "e1", 1)
+	defer unsubscribeHealthy()
+
+	for i := 0; i <= subscriberBufferSize; i++ {
+		if _, err := repo.Update(ctx, "1", domain.FlagPatch{}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case event, ok := <-healthy:
+			if !ok || event.Version != i+2 {
+				t.Fatalf("healthy subscriber = (%+v, %v), want version %d", event, ok, i+2)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("healthy subscriber stopped receiving events")
+		}
+	}
+
+	for i := 0; i < subscriberBufferSize; i++ {
+		if event, ok := <-slow; !ok || event.Version != i+2 {
+			t.Fatalf("buffered event = (%+v, %v), want version %d", event, ok, i+2)
+		}
+	}
+	select {
+	case _, ok := <-slow:
+		if ok {
+			t.Fatal("overflowed subscriber should be closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("overflowed subscriber stayed open after losing the final update")
+	}
+	// Cleanup remains safe after eviction and when called repeatedly.
+	unsubscribeSlow()
+	unsubscribeSlow()
+	if _, err := repo.Update(ctx, "1", domain.FlagPatch{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event, ok := <-healthy:
+		if !ok || event.Version != subscriberBufferSize+3 {
+			t.Fatalf("healthy subscriber after cleanup = (%+v, %v)", event, ok)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber cleanup affected the healthy subscriber")
+	}
+}
+
 func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {
 	repo := newFlagRepo(t)
 
@@ -609,6 +663,42 @@ func TestFlagRepository_Snapshot_EmptyEnvironment(t *testing.T) {
 	}
 	if len(flags) != 0 {
 		t.Errorf("Snapshot() flags = %v, want empty", flags)
+	}
+}
+
+func TestFlagRepository_RestartPreservesSnapshotAndReplay(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	seedEnvironment(t, pool, "e1")
+	repo := NewFlagRepository(pool)
+	if _, err := repo.Create(ctx, domain.Flag{ID: "1", EnvironmentID: "e1", Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	if _, err := repo.Update(ctx, "1", domain.FlagPatch{Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	// Rebuild all process-local repository state while keeping the database.
+	restarted := NewFlagRepository(pool)
+	version, flags, err := restarted.Snapshot(ctx, "e1")
+	if err != nil || version != 2 || len(flags) != 1 || !flags[0].Enabled {
+		t.Fatalf("snapshot after restart = (%d, %+v, %v)", version, flags, err)
+	}
+	events, replayable, live, unsubscribe := restarted.SubscribeFrom(ctx, "e1", 1)
+	defer unsubscribe()
+	if !replayable || len(events) != 1 || events[0].Version != 2 || !events[0].Enabled {
+		t.Fatalf("replay after restart = (%+v, %v)", events, replayable)
+	}
+	if _, err := restarted.Update(ctx, "1", domain.FlagPatch{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-live:
+		if event.Version != 3 {
+			t.Fatalf("live version after restart = %d, want 3", event.Version)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("live delivery did not resume after restart")
 	}
 }
 
